@@ -2,6 +2,42 @@ import { getPoseCenter, getPoseRadius, rotateOffset } from "./orientation";
 import { stepSim } from "./sim-core";
 import type { Config, Orientation, SimState } from "./types";
 
+// const BODY_VS = `#version 300 es
+// precision highp float;
+// in vec3 aPosition;
+// in vec3 aNormal;
+// uniform mat4 uModel, uView, uProj;
+// out vec3 vPos, vNorm;
+// void main() {
+//   vec4 w = uModel * vec4(aPosition, 1.0);
+//   gl_Position = uProj * uView * w;
+//   vPos = w.xyz;
+//   vNorm = mat3(uModel) * aNormal;
+// }`;
+
+// const BODY_VS = `#version 300 es
+// precision highp float;
+// in vec3 aPosition;
+// in vec3 aNormal;
+// uniform mat4 uModel, uView, uProj;
+
+// // We pass in the center of the shape to scale from it properly
+// uniform vec3 uCenter;
+
+// out vec3 vPos, vNorm;
+// void main() {
+//     vec3 expandedPos = aPosition + aNormal * 0.18;
+
+//     vec4 w = uModel * vec4(expandedPos, 1.0);
+//     gl_Position = uProj * uView * w;
+//     vPos = w.xyz;
+//     vNorm = mat3(uModel) * aNormal;
+// }
+// `;
+
+const PARTICLE_RADIUS = 0.18;
+
+
 const BODY_VS = `#version 300 es
 precision highp float;
 in vec3 aPosition;
@@ -11,7 +47,7 @@ out vec3 vPos, vNorm;
 void main() {
   vec4 w = uModel * vec4(aPosition, 1.0);
   gl_Position = uProj * uView * w;
-  vPos = w.xyz;
+  vPos  = w.xyz;
   vNorm = mat3(uModel) * aNormal;
 }`;
 
@@ -332,19 +368,99 @@ export function createRenderer(canvas: HTMLCanvasElement) {
 
   function syncFaces() {
     for (const rb of renderBodies) {
+      const { body } = rb;
+
+      // Body centroid — used to orient face normals outward
+      let bcx = 0, bcy = 0, bcz = 0;
+      for (let i = 0; i < body.N; i++) {
+        bcx += body.pos[i * 3];
+        bcy += body.pos[i * 3 + 1];
+        bcz += body.pos[i * 3 + 2];
+      }
+      bcx /= body.N; bcy /= body.N; bcz /= body.N;
+
+      // Multi-face = flat shape (cube/tower). Single-face = curved shape (sphere).
+      const isMultiFace = rb.faceData.length > 1;
+
+      // Step 1 — copy particle positions and compute per-vertex normals for each face
+      for (let fi = 0; fi < rb.faceData.length; fi++) {
+        const fd = rb.faceData[fi];
+        for (let vi = 0; vi < fd.v2p.length; vi++) {
+          const pi = fd.v2p[vi];
+          fd.pos[vi * 3]     = body.pos[pi * 3];
+          fd.pos[vi * 3 + 1] = body.pos[pi * 3 + 1];
+          fd.pos[vi * 3 + 2] = body.pos[pi * 3 + 2];
+        }
+        recomputeNormals(fd.pos, fd.idx, fd.nrm);
+      }
+
+      // Step 2 — accumulate one expansion vector per particle from all faces it belongs to
+      // KEY: using the same accumulated vector in all face VBOs later means no seams
+      const expansion = new Float32Array(body.N * 3);
+
+      for (let fi = 0; fi < rb.faceData.length; fi++) {
+        const fd = rb.faceData[fi];
+
+        if (isMultiFace) {
+          // Flat face: average all vertex normals → one uniform outward normal for this face.
+          // Every particle in this face gets the SAME contribution, keeping the face flat.
+          let nx = 0, ny = 0, nz = 0;
+          for (let vi = 0; vi < fd.v2p.length; vi++) {
+            nx += fd.nrm[vi * 3];
+            ny += fd.nrm[vi * 3 + 1];
+            nz += fd.nrm[vi * 3 + 2];
+          }
+          const l = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1;
+          nx /= l; ny /= l; nz /= l;
+
+          // Face centroid to check outward direction
+          let fcx = 0, fcy = 0, fcz = 0;
+          for (let vi = 0; vi < fd.v2p.length; vi++) {
+            fcx += fd.pos[vi * 3];
+            fcy += fd.pos[vi * 3 + 1];
+            fcz += fd.pos[vi * 3 + 2];
+          }
+          fcx /= fd.v2p.length; fcy /= fd.v2p.length; fcz /= fd.v2p.length;
+          if (nx * (fcx - bcx) + ny * (fcy - bcy) + nz * (fcz - bcz) < 0) {
+            nx = -nx; ny = -ny; nz = -nz;
+          }
+
+          // Accumulate this face's outward normal into every particle it owns
+          for (const pi of fd.v2p) {
+            expansion[pi * 3]     += nx * PARTICLE_RADIUS;
+            expansion[pi * 3 + 1] += ny * PARTICLE_RADIUS;
+            expansion[pi * 3 + 2] += nz * PARTICLE_RADIUS;
+          }
+        } else {
+          // Curved face (sphere): use each vertex's own normal for radial expansion
+          for (let vi = 0; vi < fd.v2p.length; vi++) {
+            const pi = fd.v2p[vi];
+            let nx = fd.nrm[vi * 3], ny = fd.nrm[vi * 3 + 1], nz = fd.nrm[vi * 3 + 2];
+            const px = fd.pos[vi * 3] - bcx;
+            const py = fd.pos[vi * 3 + 1] - bcy;
+            const pz = fd.pos[vi * 3 + 2] - bcz;
+            if (nx * px + ny * py + nz * pz < 0) { nx = -nx; ny = -ny; nz = -nz; }
+            expansion[pi * 3]     += nx * PARTICLE_RADIUS;
+            expansion[pi * 3 + 1] += ny * PARTICLE_RADIUS;
+            expansion[pi * 3 + 2] += nz * PARTICLE_RADIUS;
+          }
+        }
+      }
+
+      // Step 3 — write expanded positions into all face VBOs using the per-particle value
+      // Same expansion[pi] used in every face that contains pi → identical world position → no seam
       for (let fi = 0; fi < rb.faceData.length; fi++) {
         const fd = rb.faceData[fi];
         const mesh = rb.meshes[fi];
 
         for (let vi = 0; vi < fd.v2p.length; vi++) {
           const pi = fd.v2p[vi];
-          fd.pos[vi * 3] = rb.body.pos[pi * 3];
-          fd.pos[vi * 3 + 1] = rb.body.pos[pi * 3 + 1];
-          fd.pos[vi * 3 + 2] = rb.body.pos[pi * 3 + 2];
+          fd.pos[vi * 3]     = body.pos[pi * 3]     + expansion[pi * 3];
+          fd.pos[vi * 3 + 1] = body.pos[pi * 3 + 1] + expansion[pi * 3 + 1];
+          fd.pos[vi * 3 + 2] = body.pos[pi * 3 + 2] + expansion[pi * 3 + 2];
         }
 
         recomputeNormals(fd.pos, fd.idx, fd.nrm);
-
         gl.bindBuffer(gl.ARRAY_BUFFER, mesh.posBuf);
         gl.bufferSubData(gl.ARRAY_BUFFER, 0, fd.pos);
         gl.bindBuffer(gl.ARRAY_BUFFER, mesh.normBuf);
@@ -440,6 +556,10 @@ export function createRenderer(canvas: HTMLCanvasElement) {
     gl.disable(gl.CULL_FACE);
     for (const rb of renderBodies) {
       gl.uniform3fv(bodyColorLoc, rb.body.color);
+      
+      const [cx, cy, cz] = getPoseCenter(rb.body.pos);
+      // gl.uniform3f(gl.getUniformLocation(bodyProg, "uCenter"), cx, cy, cz);
+
       for (const mesh of rb.meshes) {
         gl.bindVertexArray(mesh.vao);
         gl.drawElements(wireframe ? gl.LINES : gl.TRIANGLES, mesh.cnt, gl.UNSIGNED_INT, 0);
