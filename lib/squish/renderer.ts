@@ -1,5 +1,6 @@
+import { getPoseCenter, getPoseRadius, rotateOffset } from "./orientation";
 import { stepSim } from "./sim-core";
-import type { Config, SimState } from "./types";
+import type { Config, Orientation, SimState } from "./types";
 
 const BODY_VS = `#version 300 es
 precision highp float;
@@ -51,9 +52,10 @@ void main() {
 
 const LINE_FS = `#version 300 es
 precision highp float;
+uniform vec3 uColor;
 out vec4 fc;
 void main() {
-  fc = vec4(.53, .35, .1, .45);
+  fc = vec4(uColor, 1.0);
 }`;
 
 const cross3 = (a: number[], b: number[]) => [
@@ -92,9 +94,15 @@ function mat4LookAt(eye: number[], ctr: number[], up: number[]) {
   const y = cross3(z, x);
   const m = new Float32Array(16);
 
-  m[0] = x[0];  m[1] = y[0];  m[2] = z[0];
-  m[4] = x[1];  m[5] = y[1];  m[6] = z[1];
-  m[8] = x[2];  m[9] = y[2];  m[10] = z[2];
+  m[0] = x[0];
+  m[1] = y[0];
+  m[2] = z[0];
+  m[4] = x[1];
+  m[5] = y[1];
+  m[6] = z[1];
+  m[8] = x[2];
+  m[9] = y[2];
+  m[10] = z[2];
   m[12] = -(x[0] * eye[0] + x[1] * eye[1] + x[2] * eye[2]);
   m[13] = -(y[0] * eye[0] + y[1] * eye[1] + y[2] * eye[2]);
   m[14] = -(z[0] * eye[0] + z[1] * eye[1] + z[2] * eye[2]);
@@ -135,8 +143,12 @@ function mkProg(gl: WebGL2RenderingContext, vs: string, fs: string) {
 function recomputeNormals(pos: Float32Array, idx: Uint32Array, out: Float32Array) {
   out.fill(0);
   for (let t = 0; t < idx.length; t += 3) {
-    const i0 = idx[t], i1 = idx[t + 1], i2 = idx[t + 2];
-    const ax = pos[i0 * 3], ay = pos[i0 * 3 + 1], az = pos[i0 * 3 + 2];
+    const i0 = idx[t];
+    const i1 = idx[t + 1];
+    const i2 = idx[t + 2];
+    const ax = pos[i0 * 3];
+    const ay = pos[i0 * 3 + 1];
+    const az = pos[i0 * 3 + 2];
     const e1 = [pos[i1 * 3] - ax, pos[i1 * 3 + 1] - ay, pos[i1 * 3 + 2] - az];
     const e2 = [pos[i2 * 3] - ax, pos[i2 * 3 + 1] - ay, pos[i2 * 3 + 2] - az];
     const n = cross3(e1, e2);
@@ -146,6 +158,7 @@ function recomputeNormals(pos: Float32Array, idx: Uint32Array, out: Float32Array
       out[i * 3 + 2] += n[2];
     }
   }
+
   for (let i = 0; i < out.length / 3; i++) {
     const l = Math.sqrt(out[i * 3] ** 2 + out[i * 3 + 1] ** 2 + out[i * 3 + 2] ** 2) || 1;
     out[i * 3] /= l;
@@ -160,6 +173,12 @@ interface FaceMesh {
   normBuf: WebGLBuffer;
   idxBuf: WebGLBuffer;
   cnt: number;
+}
+
+interface RenderBody {
+  body: SimState;
+  meshes: FaceMesh[];
+  faceData: Array<{ v2p: number[]; idx: Uint32Array; pos: Float32Array; nrm: Float32Array }>;
 }
 
 function mkFaceMesh(
@@ -199,17 +218,20 @@ export function createRenderer(canvas: HTMLCanvasElement) {
   const bodyProg = mkProg(gl, BODY_VS, BODY_FS);
   const flatProg = mkProg(gl, FLAT_VS, FLOOR_FS);
   const lineProg = mkProg(gl, FLAT_VS, LINE_FS);
+  const bodyColorLoc = gl.getUniformLocation(bodyProg, "uColor");
+  const lineColorLoc = gl.getUniformLocation(lineProg, "uColor");
+  const lineMvpLoc = gl.getUniformLocation(lineProg, "uMVP");
 
   gl.enable(gl.DEPTH_TEST);
-  gl.clearColor(.027, .027, .054, 1);
+  gl.clearColor(0.027, 0.027, 0.054, 1);
 
   const h = 12;
   const floorVerts = new Float32Array([
-    -h, -2.8,  h,
-     h, -2.8,  h,
-     h, -2.8, -h,
-    -h, -2.8,  h,
-     h, -2.8, -h,
+    -h, -2.8, h,
+    h, -2.8, h,
+    h, -2.8, -h,
+    -h, -2.8, h,
+    h, -2.8, -h,
     -h, -2.8, -h,
   ]);
 
@@ -223,94 +245,132 @@ export function createRenderer(canvas: HTMLCanvasElement) {
   gl.vertexAttribPointer(floorPos, 3, gl.FLOAT, false, 0, 0);
   gl.bindVertexArray(null);
 
-  let sim: SimState;
-  let faceMeshes: FaceMesh[] = [];
-  let faceData: Array<{ v2p: number[]; idx: Uint32Array; pos: Float32Array; nrm: Float32Array }> = [];
+  let bodies: SimState[] = [];
+  let renderBodies: RenderBody[] = [];
   let wireframe = false;
   let showSprings = false;
   let springVAO: WebGLVertexArrayObject | null = null;
   let springBuf: WebGLBuffer | null = null;
+  let axisVAO: WebGLVertexArrayObject | null = null;
+  let axisBuf: WebGLBuffer | null = null;
+  let previewOrientation: Orientation = { x: 0, y: 0, z: 0 };
 
-  let theta = .35, phi = .30, dist = 11;
-  const target = [0, .5, 0];
-  let dragging = false, lx = 0, ly = 0;
+  let theta = 0.35;
+  let phi = 0.3;
+  let dist = 11;
+  const target = [0, 0.5, 0];
+  let dragging = false;
+  let lx = 0;
+  let ly = 0;
 
   const getEye = () => {
     const cr = dist * Math.cos(phi);
-    return [target[0] + cr * Math.sin(theta), target[1] + dist * Math.sin(phi), target[2] + cr * Math.cos(theta)] as [number, number, number];
+    return [
+      target[0] + cr * Math.sin(theta),
+      target[1] + dist * Math.sin(phi),
+      target[2] + cr * Math.cos(theta),
+    ] as [number, number, number];
   };
 
-  const onDown = (e: MouseEvent) => { dragging = true; lx = e.clientX; ly = e.clientY; };
-  const onUp = () => { dragging = false; };
-  const onMove = (e: MouseEvent) => {
-    if (!dragging) return;
-    theta -= (e.clientX - lx) * .007;
-    phi = Math.max(-1.4, Math.min(1.4, phi - (e.clientY - ly) * .007));
+  const onDown = (e: MouseEvent) => {
+    dragging = true;
     lx = e.clientX;
     ly = e.clientY;
   };
-  const onWheel = (e: WheelEvent) => { dist = Math.max(3, Math.min(22, dist + e.deltaY * .01)); };
+  const onUp = () => {
+    dragging = false;
+  };
+  const onMove = (e: MouseEvent) => {
+    if (!dragging) return;
+    theta -= (e.clientX - lx) * 0.007;
+    phi = Math.max(-1.4, Math.min(1.4, phi - (e.clientY - ly) * 0.007));
+    lx = e.clientX;
+    ly = e.clientY;
+  };
+  const onWheel = (e: WheelEvent) => {
+    dist = Math.max(3, Math.min(22, dist + e.deltaY * 0.01));
+  };
 
   canvas.addEventListener("mousedown", onDown);
   canvas.addEventListener("mouseup", onUp);
   canvas.addEventListener("mousemove", onMove);
   canvas.addEventListener("wheel", onWheel, { passive: true });
 
-  function rebuildFaces() {
-    for (const f of faceMeshes) {
-      gl.deleteBuffer(f.posBuf);
-      gl.deleteBuffer(f.normBuf);
-      gl.deleteBuffer(f.idxBuf);
-      gl.deleteVertexArray(f.vao);
+  function disposeBodyMeshes() {
+    for (const rb of renderBodies) {
+      for (const mesh of rb.meshes) {
+        gl.deleteBuffer(mesh.posBuf);
+        gl.deleteBuffer(mesh.normBuf);
+        gl.deleteBuffer(mesh.idxBuf);
+        gl.deleteVertexArray(mesh.vao);
+      }
     }
-    faceMeshes = [];
-    faceData = [];
+    renderBodies = [];
+  }
 
-    for (const { vertToParticle, triIdx } of sim.faces) {
-      const idx = new Uint32Array(triIdx);
-      faceMeshes.push(mkFaceMesh(gl, bodyProg, vertToParticle.length, idx));
-      faceData.push({
-        v2p: vertToParticle,
-        idx,
-        pos: new Float32Array(vertToParticle.length * 3),
-        nrm: new Float32Array(vertToParticle.length * 3),
-      });
-    }
+  function rebuildBodies() {
+    disposeBodyMeshes();
+
+    renderBodies = bodies.map((body) => {
+      const meshes: FaceMesh[] = [];
+      const faceData: RenderBody["faceData"] = [];
+
+      for (const { vertToParticle, triIdx } of body.faces) {
+        const idx = new Uint32Array(triIdx);
+        meshes.push(mkFaceMesh(gl, bodyProg, vertToParticle.length, idx));
+        faceData.push({
+          v2p: vertToParticle,
+          idx,
+          pos: new Float32Array(vertToParticle.length * 3),
+          nrm: new Float32Array(vertToParticle.length * 3),
+        });
+      }
+
+      return { body, meshes, faceData };
+    });
   }
 
   function syncFaces() {
-    for (let fi = 0; fi < faceData.length; fi++) {
-      const fd = faceData[fi];
-      const fm = faceMeshes[fi];
+    for (const rb of renderBodies) {
+      for (let fi = 0; fi < rb.faceData.length; fi++) {
+        const fd = rb.faceData[fi];
+        const mesh = rb.meshes[fi];
 
-      for (let vi = 0; vi < fd.v2p.length; vi++) {
-        const pi = fd.v2p[vi];
-        fd.pos[vi * 3] = sim.pos[pi * 3];
-        fd.pos[vi * 3 + 1] = sim.pos[pi * 3 + 1];
-        fd.pos[vi * 3 + 2] = sim.pos[pi * 3 + 2];
+        for (let vi = 0; vi < fd.v2p.length; vi++) {
+          const pi = fd.v2p[vi];
+          fd.pos[vi * 3] = rb.body.pos[pi * 3];
+          fd.pos[vi * 3 + 1] = rb.body.pos[pi * 3 + 1];
+          fd.pos[vi * 3 + 2] = rb.body.pos[pi * 3 + 2];
+        }
+
+        recomputeNormals(fd.pos, fd.idx, fd.nrm);
+
+        gl.bindBuffer(gl.ARRAY_BUFFER, mesh.posBuf);
+        gl.bufferSubData(gl.ARRAY_BUFFER, 0, fd.pos);
+        gl.bindBuffer(gl.ARRAY_BUFFER, mesh.normBuf);
+        gl.bufferSubData(gl.ARRAY_BUFFER, 0, fd.nrm);
       }
-
-      recomputeNormals(fd.pos, fd.idx, fd.nrm);
-
-      gl.bindBuffer(gl.ARRAY_BUFFER, fm.posBuf);
-      gl.bufferSubData(gl.ARRAY_BUFFER, 0, fd.pos);
-      gl.bindBuffer(gl.ARRAY_BUFFER, fm.normBuf);
-      gl.bufferSubData(gl.ARRAY_BUFFER, 0, fd.nrm);
     }
   }
 
   function syncSpringLines() {
-    const alive = sim.springs.filter((s) => !s.broken);
-    const v = new Float32Array(alive.length * 6);
+    let aliveCount = 0;
+    for (const body of bodies) aliveCount += body.springs.filter((spring) => !spring.broken).length;
 
-    alive.forEach(({ i, j }, k) => {
-      v[k * 6] = sim.pos[i * 3];
-      v[k * 6 + 1] = sim.pos[i * 3 + 1];
-      v[k * 6 + 2] = sim.pos[i * 3 + 2];
-      v[k * 6 + 3] = sim.pos[j * 3];
-      v[k * 6 + 4] = sim.pos[j * 3 + 1];
-      v[k * 6 + 5] = sim.pos[j * 3 + 2];
-    });
+    const v = new Float32Array(aliveCount * 6);
+    let off = 0;
+
+    for (const body of bodies) {
+      for (const { i, j, broken } of body.springs) {
+        if (broken) continue;
+        v[off++] = body.pos[i * 3];
+        v[off++] = body.pos[i * 3 + 1];
+        v[off++] = body.pos[i * 3 + 2];
+        v[off++] = body.pos[j * 3];
+        v[off++] = body.pos[j * 3 + 1];
+        v[off++] = body.pos[j * 3 + 2];
+      }
+    }
 
     if (!springVAO) {
       springVAO = gl.createVertexArray()!;
@@ -325,7 +385,34 @@ export function createRenderer(canvas: HTMLCanvasElement) {
 
     gl.bindBuffer(gl.ARRAY_BUFFER, springBuf!);
     gl.bufferData(gl.ARRAY_BUFFER, v, gl.DYNAMIC_DRAW);
-    return alive.length * 2;
+    return aliveCount * 2;
+  }
+
+  function syncPreviewAxes(preview: SimState) {
+    const center = getPoseCenter(preview.pos);
+    const axisLength = Math.max(1.25, getPoseRadius(preview.pos, center) * 1.2);
+    const [xx, xy, xz] = rotateOffset(axisLength, 0, 0, previewOrientation);
+    const [yx, yy, yz] = rotateOffset(0, axisLength, 0, previewOrientation);
+    const [zx, zy, zz] = rotateOffset(0, 0, axisLength, previewOrientation);
+    const v = new Float32Array([
+      center[0], center[1], center[2], center[0] + xx, center[1] + xy, center[2] + xz,
+      center[0], center[1], center[2], center[0] + yx, center[1] + yy, center[2] + yz,
+      center[0], center[1], center[2], center[0] + zx, center[1] + zy, center[2] + zz,
+    ]);
+
+    if (!axisVAO) {
+      axisVAO = gl.createVertexArray()!;
+      axisBuf = gl.createBuffer()!;
+      gl.bindVertexArray(axisVAO);
+      gl.bindBuffer(gl.ARRAY_BUFFER, axisBuf);
+      const ap = gl.getAttribLocation(lineProg, "aPosition");
+      gl.enableVertexAttribArray(ap);
+      gl.vertexAttribPointer(ap, 3, gl.FLOAT, false, 0, 0);
+      gl.bindVertexArray(null);
+    }
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, axisBuf!);
+    gl.bufferData(gl.ARRAY_BUFFER, v, gl.DYNAMIC_DRAW);
   }
 
   function draw() {
@@ -333,7 +420,7 @@ export function createRenderer(canvas: HTMLCanvasElement) {
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
     const eye = getEye();
-    const proj = mat4Persp(Math.PI / 4, canvas.width / canvas.height, .1, 80);
+    const proj = mat4Persp(Math.PI / 4, canvas.width / canvas.height, 0.1, 80);
     const view = mat4LookAt(eye, target, [0, 1, 0]);
     const mvp = mat4Mul(proj, view);
     const id = mat4Id();
@@ -349,35 +436,55 @@ export function createRenderer(canvas: HTMLCanvasElement) {
     gl.uniformMatrix4fv(gl.getUniformLocation(bodyProg, "uProj"), false, proj);
     gl.uniform3fv(gl.getUniformLocation(bodyProg, "uLightPos"), [8, 15, 8]);
     gl.uniform3fv(gl.getUniformLocation(bodyProg, "uCamPos"), eye);
-    gl.uniform3fv(gl.getUniformLocation(bodyProg, "uColor"), wireframe ? [.8, .6, .1] : [1, .843, 0]);
 
     gl.disable(gl.CULL_FACE);
-    for (const m of faceMeshes) {
-      gl.bindVertexArray(m.vao);
-      gl.drawElements(wireframe ? gl.LINES : gl.TRIANGLES, m.cnt, gl.UNSIGNED_INT, 0);
+    for (const rb of renderBodies) {
+      gl.uniform3fv(bodyColorLoc, rb.body.color);
+      for (const mesh of rb.meshes) {
+        gl.bindVertexArray(mesh.vao);
+        gl.drawElements(wireframe ? gl.LINES : gl.TRIANGLES, mesh.cnt, gl.UNSIGNED_INT, 0);
+      }
     }
     gl.enable(gl.CULL_FACE);
+
+    const preview = bodies.find((body) => !body.dropped);
+    if (preview) {
+      syncPreviewAxes(preview);
+      gl.useProgram(lineProg);
+      gl.uniformMatrix4fv(lineMvpLoc, false, mvp);
+      gl.bindVertexArray(axisVAO);
+      gl.uniform3fv(lineColorLoc, [1.0, 0.35, 0.35]);
+      gl.drawArrays(gl.LINES, 0, 2);
+      gl.uniform3fv(lineColorLoc, [0.4, 1.0, 0.5]);
+      gl.drawArrays(gl.LINES, 2, 2);
+      gl.uniform3fv(lineColorLoc, [0.45, 0.7, 1.0]);
+      gl.drawArrays(gl.LINES, 4, 2);
+    }
 
     if (showSprings) {
       const cnt = syncSpringLines();
       gl.useProgram(lineProg);
-      gl.uniformMatrix4fv(gl.getUniformLocation(lineProg, "uMVP"), false, mvp);
+      gl.uniformMatrix4fv(lineMvpLoc, false, mvp);
+      gl.uniform3fv(lineColorLoc, [0.53, 0.35, 0.1]);
       gl.bindVertexArray(springVAO);
       gl.drawArrays(gl.LINES, 0, cnt);
     }
   }
 
   return {
-    load(nextSim: SimState) {
-      sim = nextSim;
-      rebuildFaces();
+    load(nextBodies: SimState[]) {
+      bodies = nextBodies;
+      rebuildBodies();
       syncFaces();
       draw();
     },
     update(cfg: Config) {
-      stepSim(sim, cfg);
+      stepSim(bodies, cfg);
       syncFaces();
       draw();
+    },
+    setPreviewOrientation(orientation: Orientation) {
+      previewOrientation = { ...orientation };
     },
     toggleSprings() {
       showSprings = !showSprings;
@@ -386,17 +493,23 @@ export function createRenderer(canvas: HTMLCanvasElement) {
       wireframe = !wireframe;
     },
     resize() {
-      // Multiply CSS size by pixel ratio for high-res Retina displays
       const dpr = window.devicePixelRatio || 1;
       canvas.width = Math.floor(canvas.clientWidth * dpr);
       canvas.height = Math.floor(canvas.clientHeight * dpr);
       draw();
     },
     dispose() {
+      disposeBodyMeshes();
       canvas.removeEventListener("mousedown", onDown);
       canvas.removeEventListener("mouseup", onUp);
       canvas.removeEventListener("mousemove", onMove);
       canvas.removeEventListener("wheel", onWheel);
+      gl.deleteBuffer(floorBuf);
+      gl.deleteVertexArray(floorVAO);
+      if (springBuf) gl.deleteBuffer(springBuf);
+      if (springVAO) gl.deleteVertexArray(springVAO);
+      if (axisBuf) gl.deleteBuffer(axisBuf);
+      if (axisVAO) gl.deleteVertexArray(axisVAO);
     },
   };
 }

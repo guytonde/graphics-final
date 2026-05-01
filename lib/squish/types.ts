@@ -6,9 +6,12 @@ export interface Spring {
 }
 
 export type ShapeName = "cube" | "sphere" | "tower";
+export type BodyColor = [number, number, number];
 
 export interface SimState {
+  id: number;
   shape: ShapeName;
+  color: BodyColor;
   N: number;
   pos: Float32Array;
   prev: Float32Array;
@@ -23,4 +26,10 @@ export interface Config {
   damping: number;
   breakRatio: number;
   substeps: number;
+}
+
+export interface Orientation {
+  x: number;
+  y: number;
+  z: number;
 }

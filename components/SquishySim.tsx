@@ -583,48 +583,195 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-// Change these 4 lines:
-import { makeActions, type Actions, type Config } from "../lib/squish/sim-core";
+import { colorForId } from "../lib/squish/colors";
+import { getPoseBounds, getPoseCenter, translatePose } from "../lib/squish/orientation";
+import { makeActions, type Actions } from "../lib/squish/sim-core";
 import { createRenderer } from "../lib/squish/renderer";
-import { buildShape, type ShapeName } from "../lib/squish/shapes";
+import { buildShape } from "../lib/squish/shapes";
+import type { Config, Orientation, ShapeName, SimState } from "../lib/squish/types";
 import { HUD, ShapeBar, SliderPanel, ActionBar } from "../lib/squish/ui";
+
+type Stats = {
+  bodies: number;
+  springs: number;
+  broken: number;
+  pct: string;
+  status: string;
+};
 
 export default function SquishySim() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const cfg = useRef<Config>({ stiffness: 380, damping: 0.95, breakRatio: 0.6, substeps: 8 });
+  const cfg = useRef<Config>({ stiffness: 1500, damping: 0.99, breakRatio: 2, substeps: 10 });
   const actionsRef = useRef<Actions | null>(null);
-  const statsRef = useRef({ springs: 0, broken: 0, pct: "0%", status: "READY" });
+  const statsRef = useRef<Stats>({ bodies: 1, springs: 0, broken: 0, pct: "0%", status: "READY" });
+  const orientation = useRef<Orientation>({ x: 0, y: 0, z: 0 });
+  const selectedShape = useRef<ShapeName>("cube");
+  const nextId = useRef(1);
+  const bodiesRef = useRef<SimState[]>([]);
+  const basePoseRef = useRef<Float32Array | null>(null);
+  const rendererRef = useRef<ReturnType<typeof createRenderer> | null>(null);
+
+  const getDroppedBodies = () => bodiesRef.current.filter((body) => body.dropped);
+  const getPreview = () => bodiesRef.current.find((body) => !body.dropped) ?? null;
+
+  const updateStats = () => {
+    const bodies = bodiesRef.current;
+    const springs = bodies.reduce((sum, body) => sum + body.springs.length, 0);
+    const broken = bodies.reduce((sum, body) => sum + body.springs.filter((spring) => spring.broken).length, 0);
+    const hasDroppedBody = bodies.some((body) => body.dropped);
+    statsRef.current = {
+      bodies: bodies.length,
+      springs,
+      broken,
+      pct: springs ? `${(broken / springs * 100).toFixed(1)}%` : "0%",
+      status: hasDroppedBody ? statsRef.current.status : "READY",
+    };
+  };
+
+  const stagePreviewBody = (preview: SimState) => {
+    const basePose = basePoseRef.current;
+    if (!basePose) return;
+
+    preview.pos.set(basePose);
+    preview.prev.set(basePose);
+
+    const [cx, cy, cz] = getPoseCenter(basePose);
+    const rx = orientation.current.x * Math.PI / 180;
+    const ry = orientation.current.y * Math.PI / 180;
+    const rz = orientation.current.z * Math.PI / 180;
+    const sx = Math.sin(rx);
+    const cxr = Math.cos(rx);
+    const sy = Math.sin(ry);
+    const cyr = Math.cos(ry);
+    const sz = Math.sin(rz);
+    const czr = Math.cos(rz);
+
+    for (let i = 0; i < basePose.length; i += 3) {
+      let x = basePose[i] - cx;
+      let y = basePose[i + 1] - cy;
+      let z = basePose[i + 2] - cz;
+
+      const y1 = y * cxr - z * sx;
+      const z1 = y * sx + z * cxr;
+      y = y1;
+      z = z1;
+
+      const x2 = x * cyr + z * sy;
+      const z2 = -x * sy + z * cyr;
+      x = x2;
+      z = z2;
+
+      const x3 = x * czr - y * sz;
+      const y3 = x * sz + y * czr;
+
+      preview.pos[i] = cx + x3;
+      preview.pos[i + 1] = cy + y3;
+      preview.pos[i + 2] = cz + z;
+      preview.prev[i] = preview.pos[i];
+      preview.prev[i + 1] = preview.pos[i + 1];
+      preview.prev[i + 2] = preview.pos[i + 2];
+    }
+
+    const droppedBodies = getDroppedBodies();
+    if (!droppedBodies.length) return;
+
+    let worldTop = -Infinity;
+    for (const body of droppedBodies) {
+      const bounds = getPoseBounds(body.pos);
+      if (bounds.maxY > worldTop) worldTop = bounds.maxY;
+    }
+
+    const previewBounds = getPoseBounds(preview.pos);
+    const desiredMinY = worldTop + 0.8;
+    if (desiredMinY > previewBounds.minY) {
+      translatePose(preview.pos, preview.prev, 0, desiredMinY - previewBounds.minY, 0);
+    }
+  };
+
+  const createPreviewBody = (shape: ShapeName) => {
+    const id = nextId.current++;
+    const preview = buildShape(shape, { id, color: colorForId(id), dropped: false });
+    basePoseRef.current = new Float32Array(preview.pos);
+    stagePreviewBody(preview);
+    return preview;
+  };
+
+  const loadScene = () => {
+    const renderer = rendererRef.current;
+    if (!renderer) return;
+    renderer.load(bodiesRef.current);
+    updateStats();
+  };
+
+  const handleOrientationChange = (axis: keyof Orientation, value: number) => {
+    orientation.current[axis] = value;
+
+    const renderer = rendererRef.current;
+    if (renderer) renderer.setPreviewOrientation(orientation.current);
+
+    const preview = getPreview();
+    if (preview) {
+      stagePreviewBody(preview);
+    }
+  };
+
+  const handleShapeChange = (shape: ShapeName) => {
+    selectedShape.current = shape;
+    const preview = createPreviewBody(shape);
+    bodiesRef.current = [...getDroppedBodies(), preview];
+    loadScene();
+  };
 
   useEffect(() => {
     const canvas = canvasRef.current!;
     const renderer = createRenderer(canvas);
+    rendererRef.current = renderer;
+    renderer.setPreviewOrientation(orientation.current);
 
-    let shape: ShapeName = "cube"; 
-    let sim = buildShape(shape);
-    renderer.load(sim);
-    statsRef.current.springs = sim.springs.length;
+    bodiesRef.current = [createPreviewBody(selectedShape.current)];
+    loadScene();
 
-    const updateStats = () => {
-      const broken = sim.springs.filter(s => s.broken).length;
-      statsRef.current = {
-        springs: sim.springs.length,
-        broken,
-        pct: sim.springs.length ? `${(broken / sim.springs.length * 100).toFixed(1)}%` : "0%",
-        status: sim.dropped ? statsRef.current.status : "READY",
-      };
-    };
+    const spawnPreview = (mode: "drop" | "smash") => {
+      const preview = getPreview();
+      if (!preview) return;
 
-    const reload = (nextShape: ShapeName) => {
-      shape = nextShape;
-      sim = buildShape(shape);
-      renderer.load(sim);
-      statsRef.current = { springs: sim.springs.length, broken: 0, pct: "0%", status: "READY" };
+      preview.dropped = true;
+      if (mode === "smash") {
+        const [cx, , cz] = getPoseCenter(preview.pos);
+        for (let i = 0; i < preview.N; i++) {
+          const base = i * 3;
+          const str = Math.max(0, 1.4 - Math.hypot(preview.pos[base] - cx, preview.pos[base + 2] - cz) * 0.8);
+          const j = (Math.random() - 0.5) * 0.12;
+          preview.prev[base + 1] = preview.pos[base + 1] + str * 1.8;
+          preview.prev[base] -= j;
+          preview.prev[base + 2] -= j;
+        }
+      }
+
+      const nextPreview = createPreviewBody(selectedShape.current);
+      bodiesRef.current = [...getDroppedBodies(), nextPreview];
+      statsRef.current.status = mode === "smash" ? "SMASHED" : "SIMULATING";
+      loadScene();
     };
 
     actionsRef.current = makeActions({
-      getSim: () => sim,
-      setStatus: (status) => { statsRef.current.status = status; },
-      reload,
+      drop: () => spawnPreview("drop"),
+      smash: () => spawnPreview("smash"),
+      melt: () => {
+        for (const body of getDroppedBodies()) {
+          body.springs.forEach((spring) => {
+            spring.broken = true;
+          });
+        }
+        statsRef.current.status = "MELTED";
+        updateStats();
+      },
+      clear: () => {
+        bodiesRef.current = [];
+        bodiesRef.current = [createPreviewBody(selectedShape.current)];
+        statsRef.current.status = "READY";
+        loadScene();
+      },
       toggleSprings: () => renderer.toggleSprings(),
       toggleWireframe: () => renderer.toggleWireframe(),
     });
@@ -645,6 +792,9 @@ export default function SquishySim() {
     return () => {
       cancelAnimationFrame(raf);
       window.removeEventListener("resize", resize);
+      rendererRef.current = null;
+      bodiesRef.current = [];
+      basePoseRef.current = null;
       renderer.dispose();
     };
   }, []);
@@ -653,8 +803,8 @@ export default function SquishySim() {
     <div style={{ position: "relative", width: "100vw", height: "100vh" }}>
       <canvas ref={canvasRef} style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }} />
       <HUD statsRef={statsRef} />
-      <SliderPanel cfg={cfg} />
-      <ShapeBar onShape={(shape) => actionsRef.current?.reset(shape)} />
+      <SliderPanel cfg={cfg} onOrientationChange={handleOrientationChange} />
+      <ShapeBar onShape={handleShapeChange} />
       <ActionBar actionsRef={actionsRef} />
     </div>
   );

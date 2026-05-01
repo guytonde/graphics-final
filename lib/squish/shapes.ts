@@ -1,4 +1,12 @@
-import type { ShapeName, SimState } from "./types";
+import type { BodyColor, ShapeName, SimState } from "./types";
+
+interface ShapeMeta {
+  id?: number;
+  color?: BodyColor;
+  dropped?: boolean;
+}
+
+const defaultColor: BodyColor = [1, 0.843, 0];
 
 // PERIDYNAMICS: Connects all particles within a spatial horizon
 function applyPeridynamicHorizon(pos: Float32Array, N: number, horizon: number) {
@@ -25,7 +33,8 @@ function buildGrid(
   gz: number,
   s: number,
   y0: number,
-  shape: ShapeName
+  shape: ShapeName,
+  meta: ShapeMeta = {}
 ): SimState {
   const N = gx * gy * gz;
   const pidx = (x: number, y: number, z: number) => (x * gy + y) * gz + z;
@@ -78,18 +87,20 @@ function buildGrid(
   });
 
   return {
+    id: meta.id ?? 0,
     shape,
+    color: meta.color ?? defaultColor,
     N,
     pos,
     prev: new Float32Array(pos),
     facc: new Float32Array(N * 3),
     springs,
     faces,
-    dropped: false,
+    dropped: meta.dropped ?? false,
   };
 }
 
-function sphere(): SimState {
+function sphere(meta: ShapeMeta = {}): SimState {
   const radius = 1.3;
   const y0 = 2.8;
   const shells = 2;   // Concentric volume layers for soft body mass
@@ -175,21 +186,23 @@ function sphere(): SimState {
   for (const f of faces) triIdx.push(f[0], f[1], f[2]);
 
   return {
+    id: meta.id ?? 0,
     shape: "sphere",
+    color: meta.color ?? defaultColor,
     N,
     pos,
     prev: new Float32Array(pos), // Perfectly synced
     facc: new Float32Array(N * 3),
     springs,
     faces: [{ vertToParticle, triIdx }],
-    dropped: false
+    dropped: meta.dropped ?? false
   };
 }
 
-export function buildShape(shape: ShapeName): SimState {
-  if (shape === "sphere") return sphere();
-  if (shape === "tower") return buildGrid(3, 10, 3, 0.38, 0.5, "tower");
-  return buildGrid(6, 6, 6, 0.38, 2.5, "cube");
+export function buildShape(shape: ShapeName, meta: ShapeMeta = {}): SimState {
+  if (shape === "sphere") return sphere(meta);
+  if (shape === "tower") return buildGrid(3, 10, 3, 0.38, 0.5, "tower", meta);
+  return buildGrid(6, 6, 6, 0.38, 2.5, "cube", meta);
 }
 
 export type { ShapeName } from "./types";
