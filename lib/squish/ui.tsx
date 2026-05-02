@@ -55,10 +55,10 @@ export function SliderPanel({
     <div style={s.panel}>
       <div style={s.group}>
         <p style={s.sectionTitle}>Physics</p>
-        <SliderRow label="Stiffness" min={50} max={3000} step={25} defaultValue={1500} fmt={(v) => String(v)} onChange={(v) => (cfg.current.stiffness = v)} />
-        <SliderRow label="Damping" min={88} max={198} step={1} defaultValue={99} fmt={(v) => (v / 100).toFixed(2)} onChange={(v) => (cfg.current.damping = v / 100)} />
-        <SliderRow label="Break %" min={10} max={20000} step={5} defaultValue={20000} fmt={(v) => `${v}%`} onChange={(v) => (cfg.current.breakRatio = v / 100)} />
-        <SliderRow label="Substeps" min={1} max={40} step={1} defaultValue={10} fmt={(v) => String(v)} onChange={(v) => (cfg.current.substeps = v)} />
+        <SliderRow label="Stiffness" min={50} max={30000} step={25} defaultValue={1500} fmt={(v) => String(v)} onChange={(v) => (cfg.current.stiffness = v)} />
+        <SliderRow label="Damping" min={88} max={998} step={1} defaultValue={99} fmt={(v) => (v / 100).toFixed(2)} onChange={(v) => (cfg.current.damping = v / 100)} />
+        <SliderRow label="Break %" min={10} max={20000} step={5} defaultValue={200} fmt={(v) => `${v}%`} onChange={(v) => (cfg.current.breakRatio = v / 100)} />
+        <SliderRow label="Substeps" min={1} max={400} step={1} defaultValue={10} fmt={(v) => String(v)} onChange={(v) => (cfg.current.substeps = v)} />
       </div>
       <div style={s.group}>
         <p style={s.sectionTitle}>Prism</p>
