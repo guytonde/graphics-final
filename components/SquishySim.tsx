@@ -637,7 +637,9 @@ declare global {
 }
 
 const SMASH_LAUNCH_SPEED = 0.95;
-const JENGA_LAYER_COUNT = 18;
+const DEFAULT_JENGA_LAYER_COUNT = 5;
+const MIN_JENGA_LAYER_COUNT = 1;
+const MAX_JENGA_LAYER_COUNT = 18;
 const JENGA_BLOCKS_PER_LAYER = 3;
 const JENGA_Y_TURN: Orientation = { x: 0, y: 90, z: 0 };
 const JENGA_GROUND_PARTICLE_Y = FLOOR_Y + PARTICLE_RADIUS;
@@ -648,6 +650,7 @@ export default function SquishySim() {
   const actionsRef = useRef<Actions | null>(null);
   const statsRef = useRef<Stats>({ bodies: 1, springs: 0, broken: 0, pct: "0%", status: "READY" });
   const orientation = useRef<Orientation>({ x: 0, y: 0, z: 0 });
+  const jengaLayerCount = useRef(DEFAULT_JENGA_LAYER_COUNT);
   const prismDimensions = useRef<PrismDimensions>({ ...DEFAULT_PRISM_DIMENSIONS });
   const selectedShape = useRef<ShapeName>("jenga");
   const previewId = useRef(1);
@@ -768,7 +771,7 @@ export default function SquishySim() {
       ...dimensions,
     };
 
-    if (selectedShape.current === "prism") {
+    if (selectedShape.current === "prism" && getPreview()) {
       replacePreview("prism");
     }
   };
@@ -807,9 +810,26 @@ export default function SquishySim() {
     applyPrismDimensions({ [axis]: value });
   };
 
+  const handleJengaLayerCountChange = (value: number) => {
+    jengaLayerCount.current = Math.max(MIN_JENGA_LAYER_COUNT, Math.min(MAX_JENGA_LAYER_COUNT, Math.round(value)));
+  };
+
   const handleShapeChange = (shape: ShapeName) => {
+    const preview = getPreview();
+    if (preview?.shape === shape) {
+      bodiesRef.current = getDroppedBodies();
+      loadScene();
+      return;
+    }
+
     selectedShape.current = shape;
-    replacePreview(shape);
+    if (preview) {
+      replacePreview(shape);
+    } else {
+      const nextPreview = createPreviewBody(shape);
+      bodiesRef.current = [...getDroppedBodies(), nextPreview];
+      loadScene();
+    }
   };
 
   const autobuildJengaTower = () => {
@@ -826,7 +846,7 @@ export default function SquishySim() {
     const droppedBodies: SimState[] = [];
     let id = 1;
 
-    for (let layer = 0; layer < JENGA_LAYER_COUNT; layer++) {
+    for (let layer = 0; layer < jengaLayerCount.current; layer++) {
       const targetMinY = JENGA_GROUND_PARTICLE_Y + layer * layerStep;
       const rotated = layer % 2 === 1;
 
@@ -844,8 +864,7 @@ export default function SquishySim() {
 
     previewId.current = id;
     nextId.current = id + 1;
-    const nextPreview = createPreviewBody(selectedShape.current, previewId.current);
-    bodiesRef.current = [...droppedBodies, nextPreview];
+    bodiesRef.current = droppedBodies;
     statsRef.current.status = "AUTOBUILT";
     loadScene();
   };
@@ -856,12 +875,12 @@ export default function SquishySim() {
     rendererRef.current = renderer;
     renderer.setPreviewOrientation(orientation.current);
 
-    bodiesRef.current = [createPreviewBody(selectedShape.current)];
+    bodiesRef.current = [];
     loadScene();
 
     const spawnPreview = (mode: "drop" | "smash") => {
-      const preview = getPreview();
-      if (!preview) return;
+      const existingPreview = getPreview();
+      const preview = existingPreview ?? createPreviewBody(selectedShape.current, previewId.current);
 
       preview.dropped = true;
       if (mode === "smash") {
@@ -875,9 +894,14 @@ export default function SquishySim() {
         }
       }
 
+      const droppedBodies = existingPreview ? getDroppedBodies() : [...getDroppedBodies(), preview];
       previewId.current = nextId.current++;
-      const nextPreview = createPreviewBody(selectedShape.current);
-      bodiesRef.current = [...getDroppedBodies(), nextPreview];
+      if (mode === "drop") {
+        const nextPreview = createPreviewBody(selectedShape.current);
+        bodiesRef.current = [...droppedBodies, nextPreview];
+      } else {
+        bodiesRef.current = droppedBodies;
+      }
       statsRef.current.status = mode === "smash" ? "SMASHED" : "SIMULATING";
       loadScene();
     };
@@ -897,7 +921,6 @@ export default function SquishySim() {
       },
       clear: () => {
         bodiesRef.current = [];
-        bodiesRef.current = [createPreviewBody(selectedShape.current)];
         statsRef.current.status = "READY";
         loadScene();
       },
@@ -952,10 +975,38 @@ export default function SquishySim() {
   }, []);
 
   return (
-    <div style={{ position: "relative", width: "100vw", height: "100vh" }}>
-      <canvas ref={canvasRef} style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }} />
+    <div style={{ position: "relative", width: "100vw", height: "100vh", overflow: "hidden" }}>
+      <div
+        aria-hidden="true"
+        style={{
+          position: "absolute",
+          inset: 0,
+          pointerEvents: "none",
+          background: [
+            "radial-gradient(ellipse at 14% 18%, rgba(255,255,255,0.98) 0 5.5%, rgba(255,255,255,0) 11%)",
+            "radial-gradient(ellipse at 21% 21%, rgba(255,255,255,0.98) 0 7.5%, rgba(255,255,255,0) 13%)",
+            "radial-gradient(ellipse at 29% 18%, rgba(255,255,255,0.98) 0 5.8%, rgba(255,255,255,0) 11.5%)",
+            "radial-gradient(ellipse at 61% 14%, rgba(255,255,255,0.98) 0 5.2%, rgba(255,255,255,0) 10.4%)",
+            "radial-gradient(ellipse at 68% 17%, rgba(255,255,255,0.98) 0 7.2%, rgba(255,255,255,0) 12.8%)",
+            "radial-gradient(ellipse at 76% 14%, rgba(255,255,255,0.98) 0 5.4%, rgba(255,255,255,0) 10.8%)",
+            "radial-gradient(ellipse at 37% 33%, rgba(255,255,255,0.96) 0 4.8%, rgba(255,255,255,0) 9.8%)",
+            "radial-gradient(ellipse at 43% 35%, rgba(255,255,255,0.98) 0 6.4%, rgba(255,255,255,0) 11.6%)",
+            "radial-gradient(ellipse at 50% 33%, rgba(255,255,255,0.96) 0 4.9%, rgba(255,255,255,0) 9.9%)",
+            "linear-gradient(180deg, #52a8ff 0%, #81d0ff 58%, #dff4ff 100%)",
+          ].join(", "),
+        }}
+      />
+      <canvas ref={canvasRef} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", background: "transparent" }} />
       <HUD statsRef={statsRef} />
-      <SliderPanel cfg={cfg} onOrientationChange={handleOrientationChange} onPrismDimensionChange={handlePrismDimensionChange} />
+      <SliderPanel
+        cfg={cfg}
+        defaultJengaLayerCount={DEFAULT_JENGA_LAYER_COUNT}
+        minJengaLayerCount={MIN_JENGA_LAYER_COUNT}
+        maxJengaLayerCount={MAX_JENGA_LAYER_COUNT}
+        onJengaLayerCountChange={handleJengaLayerCountChange}
+        onOrientationChange={handleOrientationChange}
+        onPrismDimensionChange={handlePrismDimensionChange}
+      />
       <ShapeBar onShape={handleShapeChange} />
       <ActionBar actionsRef={actionsRef} />
     </div>

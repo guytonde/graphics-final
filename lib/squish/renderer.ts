@@ -1,6 +1,6 @@
-import { PARTICLE_RADIUS, SURFACE_CONTACT_HALF_EXTENT } from "./contact";
+import { PARTICLE_RADIUS, SURFACE_CONTACT_HALF_EXTENT, isFlatContactShape } from "./contact";
 import { getPoseCenter, getPoseRadius, rotateOffset } from "./orientation";
-import { resolveBodyContacts, stepSim } from "./sim-core";
+import { FLOOR_Y, resolveBodyContacts, stepSim } from "./sim-core";
 import type { Config, Orientation, SimState } from "./types";
 
 // const BODY_VS = `#version 300 es
@@ -79,9 +79,15 @@ precision highp float;
 in vec2 vUV;
 out vec4 fc;
 void main() {
-  vec2 g = abs(fract(vUV) - .5);
-  float line = 1. - smoothstep(0., .04, min(g.x, g.y));
-  fc = vec4(vec3(.09 + line * .05), 1.);
+  vec2 patchUV = vUV * 0.18;
+  float patchMix = 0.5 + 0.5 * sin(patchUV.x * 1.7 + patchUV.y * 1.2);
+  vec3 grassA = vec3(0.18, 0.56, 0.18);
+  vec3 grassB = vec3(0.27, 0.68, 0.22);
+  vec3 color = mix(grassA, grassB, patchMix);
+  float blades = 0.5 + 0.5 * sin(vUV.x * 5.5 + vUV.y * 1.6);
+  color *= 0.92 + blades * 0.12;
+  color *= 0.94 + 0.06 * sin((vUV.x - vUV.y) * 0.8);
+  fc = vec4(color, 1.);
 }`;
 
 const LINE_FS = `#version 300 es
@@ -279,16 +285,16 @@ export function createRenderer(canvas: HTMLCanvasElement) {
   const lineMvpLoc = gl.getUniformLocation(lineProg, "uMVP");
 
   gl.enable(gl.DEPTH_TEST);
-  gl.clearColor(0.027, 0.027, 0.054, 1);
+  gl.clearColor(0, 0, 0, 0);
 
-  const h = 12;
+  const h = 2048;
   const floorVerts = new Float32Array([
-    -h, -2.8, h,
-    h, -2.8, h,
-    h, -2.8, -h,
-    -h, -2.8, h,
-    h, -2.8, -h,
-    -h, -2.8, -h,
+    -h, FLOOR_Y, h,
+    h, FLOOR_Y, h,
+    h, FLOOR_Y, -h,
+    -h, FLOOR_Y, h,
+    h, FLOOR_Y, -h,
+    -h, FLOOR_Y, -h,
   ]);
 
   const floorVAO = gl.createVertexArray()!;
@@ -424,6 +430,7 @@ export function createRenderer(canvas: HTMLCanvasElement) {
     const { origin, dir } = getMouseRay(clientX, clientY);
     let best: {
       body: SimState;
+      faceIndex: number;
       hitPoint: [number, number, number];
     } | null = null;
     let bestT = Infinity;
@@ -431,7 +438,8 @@ export function createRenderer(canvas: HTMLCanvasElement) {
     for (const rb of renderBodies) {
       if (!rb.body.dropped) continue;
 
-      for (const fd of rb.faceData) {
+      for (let faceIndex = 0; faceIndex < rb.faceData.length; faceIndex++) {
+        const fd = rb.faceData[faceIndex];
         for (let i = 0; i < fd.idx.length; i += 3) {
           const ia = fd.idx[i] * 3;
           const ib = fd.idx[i + 1] * 3;
@@ -448,6 +456,7 @@ export function createRenderer(canvas: HTMLCanvasElement) {
           bestT = t;
           best = {
             body: rb.body,
+            faceIndex,
             hitPoint: [
               origin[0] + dir[0] * t,
               origin[1] + dir[1] * t,
@@ -475,29 +484,45 @@ export function createRenderer(canvas: HTMLCanvasElement) {
       }
     }
 
-    const grabRadius = Math.max(
-      MIN_GRAB_RADIUS,
-      Math.min(MAX_GRAB_RADIUS, getPoseRadius(best.body.pos) * GRAB_RADIUS_SCALE)
-    );
-    const grabRadiusSq = grabRadius * grabRadius;
     const influences: GrabInfluence[] = [];
 
-    for (let i = 0; i < best.body.N; i++) {
-      const base = i * 3;
-      const dx = best.body.pos[base] - best.hitPoint[0];
-      const dy = best.body.pos[base + 1] - best.hitPoint[1];
-      const dz = best.body.pos[base + 2] - best.hitPoint[2];
-      const distSq = dx * dx + dy * dy + dz * dz;
-      if (distSq > grabRadiusSq) continue;
+    if (isFlatContactShape(best.body.shape)) {
+      const clickedFace = best.body.faces[best.faceIndex];
+      for (const particle of clickedFace.vertToParticle) {
+        const base = particle * 3;
+        influences.push({
+          particle,
+          offset: [
+            best.hitPoint[0] - best.body.pos[base],
+            best.hitPoint[1] - best.body.pos[base + 1],
+            best.hitPoint[2] - best.body.pos[base + 2],
+          ],
+        });
+      }
+    } else {
+      const grabRadius = Math.max(
+        MIN_GRAB_RADIUS,
+        Math.min(MAX_GRAB_RADIUS, getPoseRadius(best.body.pos) * GRAB_RADIUS_SCALE)
+      );
+      const grabRadiusSq = grabRadius * grabRadius;
 
-      influences.push({
-        particle: i,
-        offset: [
-          best.hitPoint[0] - best.body.pos[base],
-          best.hitPoint[1] - best.body.pos[base + 1],
-          best.hitPoint[2] - best.body.pos[base + 2],
-        ],
-      });
+      for (let i = 0; i < best.body.N; i++) {
+        const base = i * 3;
+        const dx = best.body.pos[base] - best.hitPoint[0];
+        const dy = best.body.pos[base + 1] - best.hitPoint[1];
+        const dz = best.body.pos[base + 2] - best.hitPoint[2];
+        const distSq = dx * dx + dy * dy + dz * dz;
+        if (distSq > grabRadiusSq) continue;
+
+        influences.push({
+          particle: i,
+          offset: [
+            best.hitPoint[0] - best.body.pos[base],
+            best.hitPoint[1] - best.body.pos[base + 1],
+            best.hitPoint[2] - best.body.pos[base + 2],
+          ],
+        });
+      }
     }
 
     if (!influences.length) {

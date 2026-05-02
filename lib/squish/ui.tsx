@@ -36,10 +36,18 @@ export function HUD({
 
 export function SliderPanel({
   cfg,
+  defaultJengaLayerCount,
+  minJengaLayerCount,
+  maxJengaLayerCount,
+  onJengaLayerCountChange,
   onOrientationChange,
   onPrismDimensionChange,
 }: {
   cfg: MutableRefObject<Config>;
+  defaultJengaLayerCount: number;
+  minJengaLayerCount: number;
+  maxJengaLayerCount: number;
+  onJengaLayerCountChange: (value: number) => void;
   onOrientationChange: (axis: keyof Orientation, value: number) => void;
   onPrismDimensionChange: (axis: keyof PrismDimensions, value: number) => void;
 }) {
@@ -57,14 +65,16 @@ export function SliderPanel({
         <SliderRow label="Width" min={2} max={12} step={1} defaultValue={DEFAULT_PRISM_DIMENSIONS.width} fmt={(v) => String(v)} tone="#f3c86a" onChange={(v) => onPrismDimensionChange("width", v)} />
         <SliderRow label="Height" min={2} max={14} step={1} defaultValue={DEFAULT_PRISM_DIMENSIONS.height} fmt={(v) => String(v)} tone="#ff9f68" onChange={(v) => onPrismDimensionChange("height", v)} />
         <SliderRow label="Depth" min={2} max={12} step={1} defaultValue={DEFAULT_PRISM_DIMENSIONS.depth} fmt={(v) => String(v)} tone="#7ee0ff" onChange={(v) => onPrismDimensionChange("depth", v)} />
-        <p style={s.panelHint}>These sliders reshape the next prism preview before you spawn it.</p>
+      </div>
+      <div style={s.group}>
+        <p style={s.sectionTitle}>Tower</p>
+        <SliderRow label="Layers" min={minJengaLayerCount} max={maxJengaLayerCount} step={1} defaultValue={defaultJengaLayerCount} fmt={(v) => String(v)} tone="#f2a8ff" onChange={onJengaLayerCountChange} />
       </div>
       <div style={s.group}>
         <p style={s.sectionTitle}>Orientation</p>
         <SliderRow label="Rotate X" min={-180} max={180} step={5} defaultValue={0} fmt={(v) => `${v}\u00b0`} tone="#ff8585" onChange={(v) => onOrientationChange("x", v)} />
         <SliderRow label="Rotate Y" min={-180} max={180} step={5} defaultValue={0} fmt={(v) => `${v}\u00b0`} tone="#7ef7a9" onChange={(v) => onOrientationChange("y", v)} />
         <SliderRow label="Rotate Z" min={-180} max={180} step={5} defaultValue={0} fmt={(v) => `${v}\u00b0`} tone="#8ab6ff" onChange={(v) => onOrientationChange("z", v)} />
-        <p style={s.panelHint}>Applied before drop. The X/Y/Z guide sticks out of the ready pose.</p>
       </div>
     </div>
   );
@@ -83,7 +93,6 @@ export function ShapeBar({ onShape }: { onShape: (shape: ShapeName) => void }) {
 export function ActionBar({ actionsRef }: { actionsRef: MutableRefObject<Actions | null> }) {
   return (
     <>
-      <p style={s.hint}>Left drag empty to orbit or a body to grab · Right drag or shift-drag to pan · Scroll to zoom</p>
       <div style={s.bar}>
         <Btn label="Spawn" onClick={() => actionsRef.current?.drop()}>▼ Spawn</Btn>
         <Btn label="Smash" onClick={() => actionsRef.current?.smash()}>💥 Smash</Btn>
@@ -158,8 +167,6 @@ const s: Record<string, CSSProperties> = {
   sectionTitle: { width: "100%", margin: 0, color: "#ffd700", fontSize: 10, letterSpacing: 3, textTransform: "uppercase", textAlign: "left" },
   slRow: { display: "flex", alignItems: "center", gap: 10, fontSize: 11, letterSpacing: 1, color: "#666", fontFamily: mono },
   slVal: { color: "#ffd700", minWidth: 38, textAlign: "right", fontFamily: mono },
-  panelHint: { width: 228, margin: 0, color: "rgba(255,215,0,0.55)", fontSize: 9, lineHeight: 1.5, letterSpacing: 1.4, textTransform: "uppercase", textAlign: "right" },
-  hint: { position: "fixed", bottom: 110, left: "50%", transform: "translateX(-50%)", fontFamily: mono, fontSize: 10, color: "rgba(255,215,0,0.28)", letterSpacing: 2, textTransform: "uppercase", whiteSpace: "nowrap", pointerEvents: "none" },
   bar: { position: "fixed", bottom: 22, left: "50%", transform: "translateX(-50%)", display: "flex", gap: 10, zIndex: 10 },
   btn: { background: "rgba(255,215,0,0.07)", border: "1px solid rgba(255,215,0,0.35)", color: "#ffd700", padding: "9px 18px", fontFamily: mono, fontSize: 11, letterSpacing: 2, textTransform: "uppercase", cursor: "pointer", transition: "background 0.15s" },
 };
