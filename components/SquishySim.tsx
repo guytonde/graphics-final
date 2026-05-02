@@ -44,6 +44,7 @@ type SquishyDebugApi = {
   setOrientation: (orientation: Partial<Orientation>) => void;
   spawn: (mode?: "drop" | "smash") => void;
   toggleFirstPerson: () => void;
+  toggleMouseCapture: () => void;
   toggleWireframe: () => void;
   toggleSprings: () => void;
   snapshot: () => DebugSnapshot;
@@ -58,7 +59,7 @@ declare global {
 const SMASH_LAUNCH_SPEED = 0.95;
 const DEFAULT_JENGA_LAYER_COUNT = 5;
 const MIN_JENGA_LAYER_COUNT = 1;
-const MAX_JENGA_LAYER_COUNT = 18;
+const MAX_JENGA_LAYER_COUNT = 160;
 const JENGA_BLOCKS_PER_LAYER = 3;
 const JENGA_Y_TURN: Orientation = { x: 0, y: 90, z: 0 };
 const JENGA_GROUND_PARTICLE_Y = FLOOR_Y + PARTICLE_RADIUS;
@@ -88,7 +89,7 @@ export default function SquishySim() {
     const hasDroppedBody = bodies.some((body) => body.dropped);
     const viewer = rendererRef.current?.getFirstPersonState();
     const status = viewer?.active
-      ? (viewer.suspended ? "VIEWER READY" : viewer.grounded ? "ON FOOT" : "FALLING")
+      ? `${viewer.suspended ? "VIEWER READY" : viewer.grounded ? "ON FOOT" : "FALLING"} / ${viewer.mouseCaptured ? "LOOK" : "UI"}`
       : hasDroppedBody
         ? statsRef.current.status
         : "READY";
@@ -410,6 +411,7 @@ export default function SquishySim() {
       toggleSprings: () => renderer.toggleSprings(),
       toggleWireframe: () => renderer.toggleWireframe(),
       toggleFirstPerson,
+      toggleMouseCapture: () => renderer.toggleMouseCapture(),
     });
 
     const resize = () => renderer.resize();
@@ -434,6 +436,7 @@ export default function SquishySim() {
         actionsRef.current?.drop();
       },
       toggleFirstPerson,
+      toggleMouseCapture: () => actionsRef.current?.toggleMouseCapture(),
       toggleWireframe: () => actionsRef.current?.toggleWireframe(),
       toggleSprings: () => actionsRef.current?.toggleSprings(),
       snapshot: () => getDebugSnapshot(),

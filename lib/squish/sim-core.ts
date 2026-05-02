@@ -53,6 +53,7 @@ export interface Actions {
   toggleSprings: () => void;
   toggleWireframe: () => void;
   toggleFirstPerson: () => void;
+  toggleMouseCapture: () => void;
 }
 
 export function makeActions(args: Actions): Actions {

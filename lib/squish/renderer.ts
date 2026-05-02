@@ -165,7 +165,7 @@ const SKY_FS = `#version 300 es
 precision highp float;
 in vec2 vUv;
 uniform vec3 uCamForward, uCamRight, uCamUp, uSunDir;
-uniform float uAspect, uTanHalfFov, uTime;
+uniform float uAspect, uTanHalfFov, uTime, uSpaceMix;
 out vec4 fc;
 
 float hash21(vec2 p) {
@@ -241,6 +241,26 @@ void main() {
   stars *= (1.0 - dayMix) * smoothstep(0.0, 0.45, ray.y);
   sky += vec3(0.72, 0.82, 1.0) * stars * 0.8;
 
+  vec3 spaceSky = mix(vec3(0.006, 0.008, 0.02), vec3(0.02, 0.035, 0.08), smoothstep(-0.4, 0.75, ray.y));
+  vec3 galaxyAxis = normalize(vec3(-0.32, 0.9, 0.22));
+  float galaxyBand = exp(-pow(dot(ray, galaxyAxis), 2.0) * 26.0);
+  vec2 galaxyUV = mat2(0.86, -0.52, 0.52, 0.86) * (ray.xz * 8.5 + ray.yy * vec2(4.0, -3.2));
+  float nebulaA = fbm(galaxyUV * 0.7 + vec2(uTime * 0.002, -uTime * 0.0015));
+  float nebulaB = fbm(galaxyUV * 1.5 - vec2(8.0, 3.0));
+  float dust = fbm(galaxyUV * 2.6 + vec2(-5.0, 11.0));
+  float deepField = smoothstep(0.9925, 1.0, noise21(floor((ray.xz / max(abs(ray.y) + 0.18, 0.12)) * 320.0) * 0.29));
+  float brightField = smoothstep(0.9962, 1.0, noise21(floor((ray.xy / max(abs(ray.z) + 0.2, 0.12)) * 820.0 + 13.0) * 0.17));
+  float aurora = smoothstep(0.65, 0.98, fbm(galaxyUV * 0.45 - vec2(2.0, 9.0))) * smoothstep(0.05, 0.78, ray.y);
+
+  spaceSky += vec3(0.55, 0.3, 0.8) * smoothstep(0.45, 0.92, nebulaA) * galaxyBand * 0.8;
+  spaceSky += vec3(0.12, 0.55, 0.95) * smoothstep(0.52, 0.95, nebulaB) * galaxyBand * 0.48;
+  spaceSky += vec3(0.95, 0.92, 0.82) * galaxyBand * smoothstep(0.22, 0.82, dust) * 0.22;
+  spaceSky += vec3(0.8, 0.88, 1.0) * deepField * (0.55 + galaxyBand * 0.7) * 1.2;
+  spaceSky += vec3(1.0, 0.96, 0.9) * brightField * (0.4 + galaxyBand * 0.55) * 0.9;
+  spaceSky += vec3(0.09, 0.22, 0.44) * aurora * 0.2;
+
+  sky = mix(sky, spaceSky, clamp(uSpaceMix, 0.0, 1.0));
+
   fc = vec4(sky, 1.0);
 }`;
 
@@ -260,6 +280,8 @@ const MAX_GRAB_RADIUS = PARTICLE_RADIUS * 6;
 const GRAB_RADIUS_SCALE = 0.32;
 const BODY_ALPHA = 0.84;
 const DAY_NIGHT_CYCLE_SPEED = 0.07;
+const SPACE_SKY_START_HEIGHT = 148;
+const SPACE_SKY_FULL_HEIGHT = 160;
 const FIRST_PERSON_HALF_EXTENT = 1;
 const FIRST_PERSON_EYE_OFFSET = 0.36;
 const FIRST_PERSON_MOUSE_SENSITIVITY = 0.0022;
@@ -941,11 +963,13 @@ export function createRenderer(canvas: HTMLCanvasElement) {
           active: true,
           suspended: firstPerson.suspended,
           grounded: firstPerson.grounded,
+          mouseCaptured: document.pointerLockElement === canvas,
         }
       : {
           active: false,
           suspended: false,
           grounded: false,
+          mouseCaptured: false,
         }
   );
 
@@ -1016,9 +1040,30 @@ export function createRenderer(canvas: HTMLCanvasElement) {
   };
 
   const requestPointerLock = () => {
-    if (document.pointerLockElement !== canvas) {
-      canvas.requestPointerLock();
+    if (document.pointerLockElement === canvas) return true;
+
+    try {
+      const request = canvas.requestPointerLock.bind(canvas) as () => Promise<void> | void;
+      const result = request();
+      if (result && typeof (result as Promise<void>).catch === "function") {
+        void (result as Promise<void>).catch((error) => {
+          console.warn("Pointer lock request was rejected.", error);
+        });
+      }
+      return true;
+    } catch (error) {
+      console.warn("Pointer lock could not be acquired.", error);
+      return false;
     }
+  };
+
+  const toggleMouseCapture = () => {
+    if (!firstPerson?.active) return false;
+    if (document.pointerLockElement === canvas) {
+      document.exitPointerLock();
+      return true;
+    }
+    return requestPointerLock();
   };
 
   const enterFirstPerson = () => {
@@ -1043,8 +1088,7 @@ export function createRenderer(canvas: HTMLCanvasElement) {
     pressedKeys.clear();
     jumpQueued = false;
     releasePointerCaptureIfNeeded();
-    requestPointerLock();
-    canvas.style.cursor = "none";
+    canvas.style.cursor = "crosshair";
     draw();
     return true;
   };
@@ -1078,7 +1122,6 @@ export function createRenderer(canvas: HTMLCanvasElement) {
     firstPerson.suspended = false;
     firstPerson.grounded = false;
     firstPerson.velocity = [0, 0, 0];
-    requestPointerLock();
     return true;
   };
 
@@ -1299,7 +1342,6 @@ export function createRenderer(canvas: HTMLCanvasElement) {
     e.preventDefault();
     if (firstPerson?.active) {
       requestPointerLock();
-      canvas.style.cursor = "none";
       return;
     }
 
@@ -1379,10 +1421,15 @@ export function createRenderer(canvas: HTMLCanvasElement) {
   };
   const onKeyDown = (e: KeyboardEvent) => {
     if (!firstPerson?.active) return;
+    if (e.code === "KeyT" && !e.repeat) {
+      e.preventDefault();
+      toggleMouseCapture();
+      return;
+    }
     if (["KeyW", "KeyA", "KeyS", "KeyD", "Space"].includes(e.code)) {
       e.preventDefault();
+      pressedKeys.add(e.code);
     }
-    pressedKeys.add(e.code);
     if (e.code === "Space" && !e.repeat) {
       jumpQueued = true;
     }
@@ -1600,6 +1647,7 @@ export function createRenderer(canvas: HTMLCanvasElement) {
     const mvp = mat4Mul(proj, view);
     const id = mat4Id();
     const time = performance.now() * 0.001;
+    const spaceMix = smoothstep(SPACE_SKY_START_HEIGHT, SPACE_SKY_FULL_HEIGHT, eye[1]);
     const lighting = getSceneLighting(time, firstPerson?.active ? firstPerson.position : target as [number, number, number]);
 
     gl.disable(gl.DEPTH_TEST);
@@ -1612,6 +1660,7 @@ export function createRenderer(canvas: HTMLCanvasElement) {
     gl.uniform1f(gl.getUniformLocation(skyProg, "uAspect"), canvas.width / canvas.height);
     gl.uniform1f(gl.getUniformLocation(skyProg, "uTanHalfFov"), Math.tan(CAMERA_FOV * 0.5));
     gl.uniform1f(gl.getUniformLocation(skyProg, "uTime"), time);
+    gl.uniform1f(gl.getUniformLocation(skyProg, "uSpaceMix"), spaceMix);
     gl.bindVertexArray(skyVAO);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
 
@@ -1705,6 +1754,7 @@ export function createRenderer(canvas: HTMLCanvasElement) {
     enterFirstPerson,
     exitFirstPerson,
     releaseFirstPerson,
+    toggleMouseCapture,
     getFirstPersonState,
     isFirstPersonActive() {
       return Boolean(firstPerson?.active);
