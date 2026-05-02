@@ -96,7 +96,7 @@
 // // ═══════════════════════════════════════════════════════
 
 // interface Spring { i:number; j:number; rest:number; broken:boolean; }
-// export type Shape = "cube"|"sphere"|"tower";
+// export type Shape = "cube"|"sphere"|"jenga";
 
 // interface ShapeData {
 //   N:number; positions:Float32Array;
@@ -169,7 +169,7 @@
 // const SHAPES:Record<Shape,()=>ShapeData>={
 //   cube:  ()=>buildGrid(6,6,6,.38,2.5),
 //   sphere:buildSphere,
-//   tower: ()=>buildGrid(3,10,3,.38,.5),
+//   jenga: ()=>buildGrid(10,3,3,.38,.5),
 // };
 
 // // ═══════════════════════════════════════════════════════
@@ -507,7 +507,7 @@
 //       <canvas ref={cvs} style={s.canvas}/>
 
 //       <div style={s.hud}>
-//         <h2 style={s.hudTitle}>⬡ Squishy Fracture Sim</h2>
+//         <h2 style={s.hudTitle}>⬡ Squishy Jenga</h2>
 //         <p style={s.row}>Springs : <b ref={stSprings} style={s.gold}>—</b></p>
 //         <p style={s.row}>Broken  : <b ref={stBroken} style={s.gold}>0</b>
 //           &nbsp;(<b ref={stPct} style={s.gold}>0%</b>)</p>
@@ -524,9 +524,9 @@
 //       <p style={s.hint}>Drag to orbit · Scroll to zoom · Click to poke</p>
 
 //       <div style={{...s.bar,bottom:64}}>
-//         {(["cube","sphere","tower"] as Shape[]).map(sh=>(
+//         {(["cube","sphere","jenga"] as Shape[]).map(sh=>(
 //           <Btn key={sh} onClick={()=>act.current?.reset(sh)}>
-//             {({cube:"⬛ Cube",sphere:"⬤ Sphere",tower:"▮ Tower"})[sh]}
+//             {({cube:"⬛ Cube",sphere:"⬤ Sphere",jenga:"▭ Jenga"})[sh]}
 //           </Btn>
 //         ))}
 //       </div>
@@ -584,9 +584,10 @@
 
 import { useEffect, useRef } from "react";
 import { colorForId } from "../lib/squish/colors";
+import { PARTICLE_RADIUS } from "../lib/squish/contact";
 import { createSceneDiagnostics } from "../lib/squish/contact";
-import { getPoseBounds, getPoseCenter, translatePose } from "../lib/squish/orientation";
-import { makeActions, type Actions } from "../lib/squish/sim-core";
+import { applyOrientationToPose, getPoseBounds, getPoseCenter, translatePose } from "../lib/squish/orientation";
+import { FLOOR_Y, makeActions, type Actions } from "../lib/squish/sim-core";
 import { createRenderer } from "../lib/squish/renderer";
 import { buildShape } from "../lib/squish/shapes";
 import { DEFAULT_PRISM_DIMENSIONS, type Config, type Orientation, type PrismDimensions, type ShapeName, type SimState } from "../lib/squish/types";
@@ -619,6 +620,7 @@ type DebugSnapshot = {
 
 type SquishyDebugApi = {
   clear: () => void;
+  autobuild: () => void;
   setShape: (shape: ShapeName) => void;
   setPrismDimensions: (dimensions: Partial<PrismDimensions>) => void;
   setOrientation: (orientation: Partial<Orientation>) => void;
@@ -635,6 +637,10 @@ declare global {
 }
 
 const SMASH_LAUNCH_SPEED = 0.95;
+const JENGA_LAYER_COUNT = 18;
+const JENGA_BLOCKS_PER_LAYER = 3;
+const JENGA_Y_TURN: Orientation = { x: 0, y: 90, z: 0 };
+const JENGA_GROUND_PARTICLE_Y = FLOOR_Y + PARTICLE_RADIUS;
 
 export default function SquishySim() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -643,7 +649,7 @@ export default function SquishySim() {
   const statsRef = useRef<Stats>({ bodies: 1, springs: 0, broken: 0, pct: "0%", status: "READY" });
   const orientation = useRef<Orientation>({ x: 0, y: 0, z: 0 });
   const prismDimensions = useRef<PrismDimensions>({ ...DEFAULT_PRISM_DIMENSIONS });
-  const selectedShape = useRef<ShapeName>("prism");
+  const selectedShape = useRef<ShapeName>("jenga");
   const previewId = useRef(1);
   const nextId = useRef(2);
   const bodiesRef = useRef<SimState[]>([]);
@@ -727,8 +733,23 @@ export default function SquishySim() {
     }
   };
 
+  const createBody = (shape: ShapeName, id: number, dropped: boolean) => (
+    buildShape(shape, { id, color: colorForId(id), dropped }, prismDimensions.current)
+  );
+
+  const orientBody = (body: SimState, nextOrientation: Orientation) => {
+    const source = new Float32Array(body.pos);
+    applyOrientationToPose(source, body.pos, body.prev, nextOrientation);
+  };
+
+  const placeBody = (body: SimState, centerX: number, minY: number, centerZ: number) => {
+    const [cx, , cz] = getPoseCenter(body.pos);
+    const bounds = getPoseBounds(body.pos);
+    translatePose(body.pos, body.prev, centerX - cx, minY - bounds.minY, centerZ - cz);
+  };
+
   const createPreviewBody = (shape: ShapeName, id = previewId.current) => {
-    const preview = buildShape(shape, { id, color: colorForId(id), dropped: false }, prismDimensions.current);
+    const preview = createBody(shape, id, false);
     basePoseRef.current = new Float32Array(preview.pos);
     stagePreviewBody(preview);
     return preview;
@@ -791,6 +812,44 @@ export default function SquishySim() {
     replacePreview(shape);
   };
 
+  const autobuildJengaTower = () => {
+    const templateX = buildShape("jenga", { dropped: true }, prismDimensions.current);
+    const templateZ = buildShape("jenga", { dropped: true }, prismDimensions.current);
+    orientBody(templateZ, JENGA_Y_TURN);
+
+    const xBounds = getPoseBounds(templateX.pos);
+    const zBounds = getPoseBounds(templateZ.pos);
+    const layerStep = (xBounds.maxY - xBounds.minY) + PARTICLE_RADIUS * 2;
+    const xLayerSpacing = (xBounds.maxZ - xBounds.minZ) + PARTICLE_RADIUS * 2;
+    const zLayerSpacing = (zBounds.maxX - zBounds.minX) + PARTICLE_RADIUS * 2;
+
+    const droppedBodies: SimState[] = [];
+    let id = 1;
+
+    for (let layer = 0; layer < JENGA_LAYER_COUNT; layer++) {
+      const targetMinY = JENGA_GROUND_PARTICLE_Y + layer * layerStep;
+      const rotated = layer % 2 === 1;
+
+      for (let slot = 0; slot < JENGA_BLOCKS_PER_LAYER; slot++) {
+        const body = createBody("jenga", id++, true);
+        if (rotated) orientBody(body, JENGA_Y_TURN);
+
+        const offset = slot - 1;
+        const centerX = rotated ? offset * zLayerSpacing : 0;
+        const centerZ = rotated ? 0 : offset * xLayerSpacing;
+        placeBody(body, centerX, targetMinY, centerZ);
+        droppedBodies.push(body);
+      }
+    }
+
+    previewId.current = id;
+    nextId.current = id + 1;
+    const nextPreview = createPreviewBody(selectedShape.current, previewId.current);
+    bodiesRef.current = [...droppedBodies, nextPreview];
+    statsRef.current.status = "AUTOBUILT";
+    loadScene();
+  };
+
   useEffect(() => {
     const canvas = canvasRef.current!;
     const renderer = createRenderer(canvas);
@@ -826,6 +885,7 @@ export default function SquishySim() {
     actionsRef.current = makeActions({
       drop: () => spawnPreview("drop"),
       smash: () => spawnPreview("smash"),
+      autobuild: () => autobuildJengaTower(),
       melt: () => {
         for (const body of getDroppedBodies()) {
           body.springs.forEach((spring) => {
@@ -851,6 +911,7 @@ export default function SquishySim() {
 
     window.__SQUISHY_DEBUG__ = {
       clear: () => actionsRef.current?.clear(),
+      autobuild: () => actionsRef.current?.autobuild(),
       setShape: (shape) => handleShapeChange(shape),
       setPrismDimensions: (dimensions) => applyPrismDimensions(dimensions),
       setOrientation: (nextOrientation) => {

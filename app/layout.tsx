@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import type { ReactNode } from "react";
 
 export const metadata: Metadata = {
-  title: "Squishy Fracture Sim — CS 354H",
+  title: "Squishy Jenga — CS 354H",
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {

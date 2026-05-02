@@ -25,7 +25,7 @@ export function HUD({
   const st = statsRef.current;
   return (
     <div style={s.hud}>
-      <h2 style={s.hudTitle}>⬡ Squishy Fracture Sim</h2>
+      <h2 style={s.hudTitle}>⬡ Squishy Jenga</h2>
       <p style={s.row}>Objects : <b style={s.gold}>{st.bodies || "—"}</b></p>
       <p style={s.row}>Springs : <b style={s.gold}>{st.springs || "—"}</b></p>
       <p style={s.row}>Broken : <b style={s.gold}>{st.broken}</b> (<b style={s.gold}>{st.pct}</b>)</p>
@@ -75,7 +75,7 @@ export function ShapeBar({ onShape }: { onShape: (shape: ShapeName) => void }) {
     <div style={{ ...s.bar, bottom: 64 }}>
       <Btn label="Prism" onClick={() => onShape("prism")}>▰ Prism</Btn>
       <Btn label="Sphere" onClick={() => onShape("sphere")}>⬤ Sphere</Btn>
-      <Btn label="Tower" onClick={() => onShape("tower")}>▮ Tower</Btn>
+      <Btn label="Jenga" onClick={() => onShape("jenga")}>▭ Jenga</Btn>
     </div>
   );
 }
@@ -87,6 +87,7 @@ export function ActionBar({ actionsRef }: { actionsRef: MutableRefObject<Actions
       <div style={s.bar}>
         <Btn label="Spawn" onClick={() => actionsRef.current?.drop()}>▼ Spawn</Btn>
         <Btn label="Smash" onClick={() => actionsRef.current?.smash()}>💥 Smash</Btn>
+        <Btn label="Autobuild" onClick={() => actionsRef.current?.autobuild()}>▤ Autobuild</Btn>
         <Btn label="Melt" onClick={() => actionsRef.current?.melt()}>~ Melt</Btn>
         <Btn label="Clear" onClick={() => actionsRef.current?.clear()}>↺ Clear</Btn>
         <Btn label="Springs" onClick={() => actionsRef.current?.toggleSprings()}>⊞ Springs</Btn>

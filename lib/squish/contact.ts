@@ -33,7 +33,7 @@ export function buildSurfaceParticleMask(
 }
 
 export function isFlatContactShape(shape: ShapeName) {
-  return shape === "prism" || shape === "tower";
+  return shape === "prism" || shape === "jenga";
 }
 
 export function createSceneDiagnostics(bodies: SimState[]): SceneDiagnostics {

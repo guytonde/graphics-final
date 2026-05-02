@@ -5,7 +5,7 @@ export interface Spring {
   broken: boolean;
 }
 
-export type ShapeName = "prism" | "sphere" | "tower";
+export type ShapeName = "prism" | "sphere" | "jenga";
 export type BodyColor = [number, number, number];
 
 export interface PrismDimensions {

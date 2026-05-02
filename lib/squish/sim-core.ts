@@ -26,6 +26,7 @@ const NEIGHBOR_OFFSETS = [-1, 0, 1].flatMap(dx =>
 export interface Actions {
   drop: () => void;
   smash: () => void;
+  autobuild: () => void;
   melt: () => void;
   clear: () => void;
   toggleSprings: () => void;

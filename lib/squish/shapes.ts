@@ -279,7 +279,7 @@ export function buildShape(
   prismDimensions: PrismDimensions = DEFAULT_PRISM_DIMENSIONS
 ): SimState {
   if (shape === 'sphere') return sphere(meta);
-  if (shape === 'tower') return buildGrid(3, 10, 3, 0.38, 0.5, 'tower', meta);
+  if (shape === 'jenga') return buildGrid(10, 3, 3, 0.38, 0.5, 'jenga', meta);
 
   const dims = normalizePrismDimensions(prismDimensions);
   return buildGrid(dims.width, dims.height, dims.depth, 0.38, 2.5, 'prism', meta);
