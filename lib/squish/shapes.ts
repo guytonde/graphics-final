@@ -1,4 +1,4 @@
-import type { BodyColor, ShapeName, SimState } from './types';
+import { DEFAULT_PRISM_DIMENSIONS, type BodyColor, type PrismDimensions, type ShapeName, type SimState } from './types';
 
 interface ShapeMeta {
   id?: number;
@@ -257,8 +257,22 @@ function sphere(meta: ShapeMeta): SimState {
   };
 }
 
-export function buildShape(shape: ShapeName, meta: ShapeMeta): SimState {
+function normalizePrismDimensions(dimensions: PrismDimensions) {
+  return {
+    width: Math.max(2, Math.round(dimensions.width)),
+    height: Math.max(2, Math.round(dimensions.height)),
+    depth: Math.max(2, Math.round(dimensions.depth)),
+  };
+}
+
+export function buildShape(
+  shape: ShapeName,
+  meta: ShapeMeta,
+  prismDimensions: PrismDimensions = DEFAULT_PRISM_DIMENSIONS
+): SimState {
   if (shape === 'sphere') return sphere(meta);
   if (shape === 'tower') return buildGrid(3, 10, 3, 0.38, 0.5, 'tower', meta);
-  return buildGrid(6, 6, 6, 0.38, 2.5, 'cube', meta);
+
+  const dims = normalizePrismDimensions(prismDimensions);
+  return buildGrid(dims.width, dims.height, dims.depth, 0.38, 2.5, 'prism', meta);
 }

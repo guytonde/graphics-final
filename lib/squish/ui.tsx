@@ -4,7 +4,7 @@ import type { CSSProperties, MutableRefObject, ReactNode } from "react";
 import { useRef } from "react";
 
 import type { Actions } from "./sim-core";
-import type { Config, Orientation } from "./types";
+import { DEFAULT_PRISM_DIMENSIONS, type Config, type Orientation, type PrismDimensions } from "./types";
 import type { ShapeName } from "./types";
 
 const mono = "'Courier New', monospace";
@@ -37,9 +37,11 @@ export function HUD({
 export function SliderPanel({
   cfg,
   onOrientationChange,
+  onPrismDimensionChange,
 }: {
   cfg: MutableRefObject<Config>;
   onOrientationChange: (axis: keyof Orientation, value: number) => void;
+  onPrismDimensionChange: (axis: keyof PrismDimensions, value: number) => void;
 }) {
   return (
     <div style={s.panel}>
@@ -49,6 +51,13 @@ export function SliderPanel({
         <SliderRow label="Damping" min={88} max={99} step={1} defaultValue={99} fmt={(v) => (v / 100).toFixed(2)} onChange={(v) => (cfg.current.damping = v / 100)} />
         <SliderRow label="Break %" min={10} max={200} step={5} defaultValue={200} fmt={(v) => `${v}%`} onChange={(v) => (cfg.current.breakRatio = v / 100)} />
         <SliderRow label="Substeps" min={1} max={20} step={1} defaultValue={10} fmt={(v) => String(v)} onChange={(v) => (cfg.current.substeps = v)} />
+      </div>
+      <div style={s.group}>
+        <p style={s.sectionTitle}>Prism</p>
+        <SliderRow label="Width" min={2} max={12} step={1} defaultValue={DEFAULT_PRISM_DIMENSIONS.width} fmt={(v) => String(v)} tone="#f3c86a" onChange={(v) => onPrismDimensionChange("width", v)} />
+        <SliderRow label="Height" min={2} max={14} step={1} defaultValue={DEFAULT_PRISM_DIMENSIONS.height} fmt={(v) => String(v)} tone="#ff9f68" onChange={(v) => onPrismDimensionChange("height", v)} />
+        <SliderRow label="Depth" min={2} max={12} step={1} defaultValue={DEFAULT_PRISM_DIMENSIONS.depth} fmt={(v) => String(v)} tone="#7ee0ff" onChange={(v) => onPrismDimensionChange("depth", v)} />
+        <p style={s.panelHint}>These sliders reshape the next prism preview before you spawn it.</p>
       </div>
       <div style={s.group}>
         <p style={s.sectionTitle}>Orientation</p>
@@ -64,7 +73,7 @@ export function SliderPanel({
 export function ShapeBar({ onShape }: { onShape: (shape: ShapeName) => void }) {
   return (
     <div style={{ ...s.bar, bottom: 64 }}>
-      <Btn onClick={() => onShape("cube")}>⬛ Cube</Btn>
+      <Btn onClick={() => onShape("prism")}>▰ Prism</Btn>
       <Btn onClick={() => onShape("sphere")}>⬤ Sphere</Btn>
       <Btn onClick={() => onShape("tower")}>▮ Tower</Btn>
     </div>

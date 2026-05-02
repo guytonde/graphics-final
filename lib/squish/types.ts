@@ -5,8 +5,20 @@ export interface Spring {
   broken: boolean;
 }
 
-export type ShapeName = "cube" | "sphere" | "tower";
+export type ShapeName = "prism" | "sphere" | "tower";
 export type BodyColor = [number, number, number];
+
+export interface PrismDimensions {
+  width: number;
+  height: number;
+  depth: number;
+}
+
+export const DEFAULT_PRISM_DIMENSIONS: PrismDimensions = {
+  width: 6,
+  height: 6,
+  depth: 6,
+};
 
 export interface SimState {
   id: number;

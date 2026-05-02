@@ -588,7 +588,7 @@ import { getPoseBounds, getPoseCenter, translatePose } from "../lib/squish/orien
 import { makeActions, type Actions } from "../lib/squish/sim-core";
 import { createRenderer } from "../lib/squish/renderer";
 import { buildShape } from "../lib/squish/shapes";
-import type { Config, Orientation, ShapeName, SimState } from "../lib/squish/types";
+import { DEFAULT_PRISM_DIMENSIONS, type Config, type Orientation, type PrismDimensions, type ShapeName, type SimState } from "../lib/squish/types";
 import { HUD, ShapeBar, SliderPanel, ActionBar } from "../lib/squish/ui";
 
 type Stats = {
@@ -605,8 +605,10 @@ export default function SquishySim() {
   const actionsRef = useRef<Actions | null>(null);
   const statsRef = useRef<Stats>({ bodies: 1, springs: 0, broken: 0, pct: "0%", status: "READY" });
   const orientation = useRef<Orientation>({ x: 0, y: 0, z: 0 });
-  const selectedShape = useRef<ShapeName>("cube");
-  const nextId = useRef(1);
+  const prismDimensions = useRef<PrismDimensions>({ ...DEFAULT_PRISM_DIMENSIONS });
+  const selectedShape = useRef<ShapeName>("prism");
+  const previewId = useRef(1);
+  const nextId = useRef(2);
   const bodiesRef = useRef<SimState[]>([]);
   const basePoseRef = useRef<Float32Array | null>(null);
   const rendererRef = useRef<ReturnType<typeof createRenderer> | null>(null);
@@ -688,9 +690,8 @@ export default function SquishySim() {
     }
   };
 
-  const createPreviewBody = (shape: ShapeName) => {
-    const id = nextId.current++;
-    const preview = buildShape(shape, { id, color: colorForId(id), dropped: false });
+  const createPreviewBody = (shape: ShapeName, id = previewId.current) => {
+    const preview = buildShape(shape, { id, color: colorForId(id), dropped: false }, prismDimensions.current);
     basePoseRef.current = new Float32Array(preview.pos);
     stagePreviewBody(preview);
     return preview;
@@ -701,6 +702,12 @@ export default function SquishySim() {
     if (!renderer) return;
     renderer.load(bodiesRef.current);
     updateStats();
+  };
+
+  const replacePreview = (shape: ShapeName = selectedShape.current) => {
+    const preview = createPreviewBody(shape);
+    bodiesRef.current = [...getDroppedBodies(), preview];
+    loadScene();
   };
 
   const handleOrientationChange = (axis: keyof Orientation, value: number) => {
@@ -715,11 +722,17 @@ export default function SquishySim() {
     }
   };
 
+  const handlePrismDimensionChange = (axis: keyof PrismDimensions, value: number) => {
+    prismDimensions.current[axis] = value;
+
+    if (selectedShape.current === "prism") {
+      replacePreview("prism");
+    }
+  };
+
   const handleShapeChange = (shape: ShapeName) => {
     selectedShape.current = shape;
-    const preview = createPreviewBody(shape);
-    bodiesRef.current = [...getDroppedBodies(), preview];
-    loadScene();
+    replacePreview(shape);
   };
 
   useEffect(() => {
@@ -748,6 +761,7 @@ export default function SquishySim() {
         }
       }
 
+      previewId.current = nextId.current++;
       const nextPreview = createPreviewBody(selectedShape.current);
       bodiesRef.current = [...getDroppedBodies(), nextPreview];
       statsRef.current.status = mode === "smash" ? "SMASHED" : "SIMULATING";
@@ -803,7 +817,7 @@ export default function SquishySim() {
     <div style={{ position: "relative", width: "100vw", height: "100vh" }}>
       <canvas ref={canvasRef} style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }} />
       <HUD statsRef={statsRef} />
-      <SliderPanel cfg={cfg} onOrientationChange={handleOrientationChange} />
+      <SliderPanel cfg={cfg} onOrientationChange={handleOrientationChange} onPrismDimensionChange={handlePrismDimensionChange} />
       <ShapeBar onShape={handleShapeChange} />
       <ActionBar actionsRef={actionsRef} />
     </div>

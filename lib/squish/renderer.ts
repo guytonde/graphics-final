@@ -379,7 +379,7 @@ export function createRenderer(canvas: HTMLCanvasElement) {
       }
       bcx /= body.N; bcy /= body.N; bcz /= body.N;
 
-      // Multi-face = flat shape (cube/tower). Single-face = curved shape (sphere).
+      // Multi-face = flat shape (prism/tower). Single-face = curved shape (sphere).
       const isMultiFace = rb.faceData.length > 1;
 
       // Step 1 — copy particle positions and compute per-vertex normals for each face
