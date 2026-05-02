@@ -2,8 +2,6 @@
 
 import dynamic from "next/dynamic";
 
-// ssr: false — Three.js uses browser-only APIs (window, WebGL, devicePixelRatio).
-// Next.js pre-renders on the server by default; this disables that for this component.
 const SquishySim = dynamic(() => import("@/components/SquishySim"), {
   ssr: false,
   loading: () => (

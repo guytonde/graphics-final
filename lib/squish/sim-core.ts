@@ -79,8 +79,6 @@ export function stepSim(bodies: SimState[], cfg: Config) {
   const total_substeps = cfg.substeps * motion_substeps;
   const sub_dt = DT / total_substeps;
   const sdt2 = sub_dt * sub_dt;
-
-  // Preserve the existing damping feel while allowing extra micro-steps for fast impacts.
   const sub_damping = Math.pow(cfg.damping, 1 / motion_substeps);
 
   for (let sub = 0; sub < total_substeps; sub++) {

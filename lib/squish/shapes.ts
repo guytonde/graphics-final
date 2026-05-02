@@ -9,8 +9,6 @@ interface ShapeMeta {
 
 const defaultColor: BodyColor = [1, 0.843, 0];
 
-// PERIDYNAMICS
-// Connects all particles within a spatial horizon
 function applyPeridynamicHorizon(pos: Float32Array, N: number, horizon: number) {
   const springs = [];
   for (let i = 0; i < N; i++) {
@@ -19,7 +17,6 @@ function applyPeridynamicHorizon(pos: Float32Array, N: number, horizon: number) 
       const dy = pos[i * 3 + 1] - pos[j * 3 + 1];
       const dz = pos[i * 3 + 2] - pos[j * 3 + 2];
       const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
-      // If particles are within the horizon, form a peridynamic bond
       if (dist > 0 && dist <= horizon) {
         springs.push({ i, j, rest: dist, broken: false });
       }
@@ -55,14 +52,10 @@ function buildGrid(
     }
   }
 
-  // EXPLICIT STRUCTURAL SPRINGS
-  // We intentionally allow duplicate i->j and j->i pairs here because 
-  // the physics stiffness scalar is tuned for this exact topology!
   const springs = [];
   for (let x = 0; x < gx; x++) {
     for (let y = 0; y < gy; y++) {
       for (let z = 0; z < gz; z++) {
-        // Nearest neighbors and diagonals (26-way)
         for (let dx = -1; dx <= 1; dx++) {
           for (let dy = -1; dy <= 1; dy++) {
             for (let dz = -1; dz <= 1; dz++) {
@@ -84,7 +77,6 @@ function buildGrid(
           }
         }
         
-        // Bending springs (distance 2, positive axis only to match original tuning)
         for (const [dx, dy, dz] of [[2, 0, 0], [0, 2, 0], [0, 0, 2]] as [number, number, number][]) {
           const nx = x + dx;
           const ny = y + dy;
@@ -151,10 +143,9 @@ function buildGrid(
 function sphere(meta: ShapeMeta): SimState {
   const radius = 1.3;
   const y0 = 2.8;
-  const shells = 2; // Concentric volume layers for soft body mass
-  const subdivs = 3; // 162 surface vertices, 320 faces -> very smooth!
+  const shells = 2;
+  const subdivs = 3;
 
-  // 1. Base Icosahedron vertices
   const t = (1 + Math.sqrt(5)) / 2;
   let verts: [number,number,number][] = [
     [-1, t, 0], [1, t, 0], [-1, -t, 0], [1, -t, 0],
@@ -162,19 +153,16 @@ function sphere(meta: ShapeMeta): SimState {
     [t, 0, -1], [t, 0, 1], [-t, 0, -1], [-t, 0, 1],
   ];
 
-  // Normalize each tuple to unit length
   verts = verts.map(([x, y, z]) => {
     const l = Math.sqrt(x*x + y*y + z*z);
     return [x/l, y/l, z/l];
   });
 
-  // Normalize base vertices to length 1
   verts = verts.map((v) => {
     const l = Math.sqrt(v[0]*v[0] + v[1]*v[1] + v[2]*v[2]);
     return [v[0]/l, v[1]/l, v[2]/l];
   });
 
-  // Base Icosahedron faces
   let faces = [
     [0, 11, 5], [0, 5, 1], [0, 1, 7], [0, 7, 10], [0, 10, 11],
     [1, 5, 9], [5, 11, 4], [11, 10, 2], [10, 7, 6], [7, 1, 8],
@@ -182,7 +170,6 @@ function sphere(meta: ShapeMeta): SimState {
     [4, 9, 5], [2, 4, 11], [6, 2, 10], [8, 6, 7], [9, 8, 1]
   ];
 
-  // 2. Subdivide faces into smaller triangles to make it smooth
   for (let s = 0; s < subdivs; s++) {
     const nextFaces: number[][] = [];
     const cache: Record<string, number> = {};
@@ -212,14 +199,12 @@ function sphere(meta: ShapeMeta): SimState {
     faces = nextFaces;
   }
 
-  // 3. Create volumetric particle positions
   const V = verts.length;
-  const N = 1 + (shells * V); // 1 center point + surface shells
+  const N = 1 + (shells * V);
 
   const pos = new Float32Array(N * 3);
-  pos[0] = 0; pos[1] = y0; pos[2] = 0; // Center particle
+  pos[0] = 0; pos[1] = y0; pos[2] = 0;
 
-  // Distribute particles into concentric shells
   for (let s = 1; s <= shells; s++) {
     const r = radius * (s / shells);
     const offset = 1 + ((s - 1) * V);
@@ -231,11 +216,8 @@ function sphere(meta: ShapeMeta): SimState {
     }
   }
 
-  // 4. Hook up structural springs using Peridynamic Horizon
-  // With a radius of 1.3 and 2 shells, a horizon of 0.85 thoroughly connects the volumetric cloud into a solid bouncy mass.
   const springs = applyPeridynamicHorizon(pos, N, 0.85);
 
-  // 5. Generate render geometry (only the outermost shell needs faces!)
   const vertToParticle: number[] = [];
   const outOffset = 1 + ((shells - 1) * V);
   for (let i = 0; i < V; i++) {
@@ -256,7 +238,7 @@ function sphere(meta: ShapeMeta): SimState {
     color: meta.color ?? defaultColor,
     N,
     pos,
-    prev: new Float32Array(pos), // Perfectly synced
+    prev: new Float32Array(pos),
     facc: new Float32Array(N * 3),
     springs,
     faces: surfaceFaces,

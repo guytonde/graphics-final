@@ -55,10 +55,10 @@ export function SliderPanel({
     <div style={s.panel}>
       <div style={s.group}>
         <p style={s.sectionTitle}>Physics</p>
-        <SliderRow label="Stiffness" min={50} max={1500} step={25} defaultValue={1500} fmt={(v) => String(v)} onChange={(v) => (cfg.current.stiffness = v)} />
-        <SliderRow label="Damping" min={88} max={99} step={1} defaultValue={99} fmt={(v) => (v / 100).toFixed(2)} onChange={(v) => (cfg.current.damping = v / 100)} />
-        <SliderRow label="Break %" min={10} max={200} step={5} defaultValue={200} fmt={(v) => `${v}%`} onChange={(v) => (cfg.current.breakRatio = v / 100)} />
-        <SliderRow label="Substeps" min={1} max={20} step={1} defaultValue={10} fmt={(v) => String(v)} onChange={(v) => (cfg.current.substeps = v)} />
+        <SliderRow label="Stiffness" min={50} max={3000} step={25} defaultValue={1500} fmt={(v) => String(v)} onChange={(v) => (cfg.current.stiffness = v)} />
+        <SliderRow label="Damping" min={88} max={198} step={1} defaultValue={99} fmt={(v) => (v / 100).toFixed(2)} onChange={(v) => (cfg.current.damping = v / 100)} />
+        <SliderRow label="Break %" min={10} max={400} step={5} defaultValue={200} fmt={(v) => `${v}%`} onChange={(v) => (cfg.current.breakRatio = v / 100)} />
+        <SliderRow label="Substeps" min={1} max={40} step={1} defaultValue={10} fmt={(v) => String(v)} onChange={(v) => (cfg.current.substeps = v)} />
       </div>
       <div style={s.group}>
         <p style={s.sectionTitle}>Prism</p>
@@ -127,7 +127,7 @@ function SliderRow({
 
   return (
     <div style={s.slRow}>
-      <label style={{ textTransform: "uppercase", color: tone ?? "#666" }}>{label}</label>
+      <label style={{ textTransform: "uppercase", color: tone ?? "#fff" }}>{label}</label>
       <input
         type="range"
         min={min}
@@ -158,12 +158,12 @@ function Btn({ label, onClick, children }: { label: string; onClick: () => void;
 const s: Record<string, CSSProperties> = {
   hud: { position: "fixed", top: 20, left: 20, fontFamily: mono, zIndex: 10, pointerEvents: "none" },
   hudTitle: { fontSize: 13, letterSpacing: 3, textTransform: "uppercase", marginBottom: 14, fontWeight: "bold", color: "#ffd700" },
-  row: { fontSize: 11, color: "#777", margin: "4px 0" },
+  row: { fontSize: 11, color: "#fff", margin: "4px 0" },
   gold: { color: "#ffd700" },
   panel: { position: "fixed", top: 20, right: 20, zIndex: 10, display: "flex", flexDirection: "column", gap: 12, alignItems: "flex-end" },
   group: { display: "flex", flexDirection: "column", gap: 12, alignItems: "flex-end", padding: "12px 12px 10px", border: "1px solid rgba(255,215,0,0.16)", background: "rgba(4,4,12,0.55)", backdropFilter: "blur(6px)" },
   sectionTitle: { width: "100%", margin: 0, color: "#ffd700", fontSize: 10, letterSpacing: 3, textTransform: "uppercase", textAlign: "left" },
-  slRow: { display: "flex", alignItems: "center", gap: 10, fontSize: 11, letterSpacing: 1, color: "#666", fontFamily: mono },
+  slRow: { display: "flex", alignItems: "center", gap: 10, fontSize: 11, letterSpacing: 1, color: "#fff", fontFamily: mono },
   slVal: { color: "#ffd700", minWidth: 38, textAlign: "right", fontFamily: mono },
   bar: { position: "fixed", bottom: 22, left: "50%", transform: "translateX(-50%)", display: "flex", gap: 10, zIndex: 10 },
   btn: { background: "rgba(255,215,0,0.07)", border: "1px solid rgba(255,215,0,0.35)", color: "#ffd700", padding: "9px 18px", fontFamily: mono, fontSize: 11, letterSpacing: 2, textTransform: "uppercase", cursor: "pointer", transition: "background 0.15s" },
