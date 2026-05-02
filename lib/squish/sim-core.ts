@@ -1,9 +1,10 @@
 import { PARTICLE_RADIUS, SURFACE_CONTACT_HALF_EXTENT, isFlatContactShape } from './contact';
 import { getPoseBounds, getPoseCenter } from './orientation';
+import { GROUND_BASE_Y, getGroundHeight } from './terrain';
 import type { Config, SimState } from './types';
 
 const GRAVITY = 18;
-export const FLOOR_Y = -2.8;
+export const FLOOR_Y = GROUND_BASE_Y;
 const DT = 1 / 60;
 const COLLISION_RADIUS = PARTICLE_RADIUS * 2;
 const COLLISION_RADIUS_SQ = COLLISION_RADIUS * COLLISION_RADIUS;
@@ -51,6 +52,7 @@ export interface Actions {
   clear: () => void;
   toggleSprings: () => void;
   toggleWireframe: () => void;
+  toggleFirstPerson: () => void;
 }
 
 export function makeActions(args: Actions): Actions {
@@ -184,12 +186,12 @@ export function resolveBodyContacts(bodies: SimState[]) {
 
 function clampFloor(body: SimState, i: number) {
   const base = i * 3;
+  const px = body.pos[base];
   const py = body.pos[base + 1];
-  const floor_ny = FLOOR_Y + PARTICLE_RADIUS;
+  const pz = body.pos[base + 2];
+  const floor_ny = getGroundHeight(px, pz) + PARTICLE_RADIUS;
   if (py > floor_ny) return;
 
-  const px = body.pos[base];
-  const pz = body.pos[base + 2];
   const ox = body.prev[base];
   const oy = body.prev[base + 1];
   const oz = body.prev[base + 2];

@@ -43,6 +43,7 @@ type SquishyDebugApi = {
   setPrismDimensions: (dimensions: Partial<PrismDimensions>) => void;
   setOrientation: (orientation: Partial<Orientation>) => void;
   spawn: (mode?: "drop" | "smash") => void;
+  toggleFirstPerson: () => void;
   toggleWireframe: () => void;
   toggleSprings: () => void;
   snapshot: () => DebugSnapshot;
@@ -85,12 +86,18 @@ export default function SquishySim() {
     const springs = bodies.reduce((sum, body) => sum + body.springs.length, 0);
     const broken = bodies.reduce((sum, body) => sum + body.springs.filter((spring) => spring.broken).length, 0);
     const hasDroppedBody = bodies.some((body) => body.dropped);
+    const viewer = rendererRef.current?.getFirstPersonState();
+    const status = viewer?.active
+      ? (viewer.suspended ? "VIEWER READY" : viewer.grounded ? "ON FOOT" : "FALLING")
+      : hasDroppedBody
+        ? statsRef.current.status
+        : "READY";
     statsRef.current = {
       bodies: bodies.length,
       springs,
       broken,
       pct: springs ? `${(broken / springs * 100).toFixed(1)}%` : "0%",
-      status: hasDroppedBody ? statsRef.current.status : "READY",
+      status,
     };
   };
 
@@ -183,6 +190,40 @@ export default function SquishySim() {
     updateStats();
   };
 
+  const exitFirstPerson = (nextShape?: ShapeName) => {
+    const renderer = rendererRef.current;
+    if (!renderer?.isFirstPersonActive()) return false;
+
+    renderer.exitFirstPerson();
+    statsRef.current.status = getDroppedBodies().length ? "SIMULATING" : "READY";
+    if (nextShape) {
+      selectedShape.current = nextShape;
+      const nextPreview = createPreviewBody(nextShape);
+      bodiesRef.current = [...getDroppedBodies(), nextPreview];
+    } else {
+      bodiesRef.current = getDroppedBodies();
+    }
+    loadScene();
+    return true;
+  };
+
+  const toggleFirstPerson = () => {
+    const renderer = rendererRef.current;
+    if (!renderer) return;
+
+    if (renderer.isFirstPersonActive()) {
+      statsRef.current.status = getDroppedBodies().length ? "SIMULATING" : "READY";
+      exitFirstPerson();
+      return;
+    }
+
+    bodiesRef.current = getDroppedBodies();
+    statsRef.current.status = "VIEWER READY";
+    loadScene();
+    renderer.enterFirstPerson();
+    updateStats();
+  };
+
   const applyPrismDimensions = (dimensions: Partial<PrismDimensions>) => {
     prismDimensions.current = {
       ...prismDimensions.current,
@@ -233,6 +274,11 @@ export default function SquishySim() {
   };
 
   const handleShapeChange = (shape: ShapeName) => {
+    if (rendererRef.current?.isFirstPersonActive()) {
+      exitFirstPerson(shape);
+      return;
+    }
+
     const preview = getPreview();
     if (preview?.shape === shape) {
       bodiesRef.current = getDroppedBodies();
@@ -297,6 +343,14 @@ export default function SquishySim() {
     loadScene();
 
     const spawnPreview = (mode: "drop" | "smash") => {
+      if (renderer.isFirstPersonActive()) {
+        if (renderer.releaseFirstPerson()) {
+          statsRef.current.status = "FALLING";
+          updateStats();
+        }
+        return;
+      }
+
       const existingPreview = getPreview();
       const preview = existingPreview ?? createPreviewBody(selectedShape.current, previewId.current);
 
@@ -324,8 +378,20 @@ export default function SquishySim() {
 
     actionsRef.current = makeActions({
       drop: () => spawnPreview("drop"),
-      smash: () => spawnPreview("smash"),
-      autobuild: () => autobuildJengaTower(),
+      smash: () => {
+        if (renderer.isFirstPersonActive()) {
+          if (renderer.releaseFirstPerson()) {
+            statsRef.current.status = "FALLING";
+            updateStats();
+          }
+          return;
+        }
+        spawnPreview("smash");
+      },
+      autobuild: () => {
+        exitFirstPerson();
+        autobuildJengaTower();
+      },
       melt: () => {
         for (const body of getDroppedBodies()) {
           body.springs.forEach((spring) => {
@@ -336,12 +402,14 @@ export default function SquishySim() {
         updateStats();
       },
       clear: () => {
+        exitFirstPerson();
         bodiesRef.current = [];
         statsRef.current.status = "READY";
         loadScene();
       },
       toggleSprings: () => renderer.toggleSprings(),
       toggleWireframe: () => renderer.toggleWireframe(),
+      toggleFirstPerson,
     });
 
     const resize = () => renderer.resize();
@@ -365,6 +433,7 @@ export default function SquishySim() {
         }
         actionsRef.current?.drop();
       },
+      toggleFirstPerson,
       toggleWireframe: () => actionsRef.current?.toggleWireframe(),
       toggleSprings: () => actionsRef.current?.toggleSprings(),
       snapshot: () => getDebugSnapshot(),
@@ -391,24 +460,17 @@ export default function SquishySim() {
   }, []);
 
   return (
-    <div style={{ position: "relative", width: "100vw", height: "100vh", overflow: "hidden" }}>
+    <div style={{ position: "relative", width: "100vw", height: "100vh", overflow: "hidden", background: "#060b13" }}>
       <div
         aria-hidden="true"
         style={{
           position: "absolute",
           inset: 0,
           pointerEvents: "none",
+          zIndex: 1,
           background: [
-            "radial-gradient(ellipse at 14% 18%, rgba(255,255,255,0.98) 0 5.5%, rgba(255,255,255,0) 11%)",
-            "radial-gradient(ellipse at 21% 21%, rgba(255,255,255,0.98) 0 7.5%, rgba(255,255,255,0) 13%)",
-            "radial-gradient(ellipse at 29% 18%, rgba(255,255,255,0.98) 0 5.8%, rgba(255,255,255,0) 11.5%)",
-            "radial-gradient(ellipse at 61% 14%, rgba(255,255,255,0.98) 0 5.2%, rgba(255,255,255,0) 10.4%)",
-            "radial-gradient(ellipse at 68% 17%, rgba(255,255,255,0.98) 0 7.2%, rgba(255,255,255,0) 12.8%)",
-            "radial-gradient(ellipse at 76% 14%, rgba(255,255,255,0.98) 0 5.4%, rgba(255,255,255,0) 10.8%)",
-            "radial-gradient(ellipse at 37% 33%, rgba(255,255,255,0.96) 0 4.8%, rgba(255,255,255,0) 9.8%)",
-            "radial-gradient(ellipse at 43% 35%, rgba(255,255,255,0.98) 0 6.4%, rgba(255,255,255,0) 11.6%)",
-            "radial-gradient(ellipse at 50% 33%, rgba(255,255,255,0.96) 0 4.9%, rgba(255,255,255,0) 9.9%)",
-            "linear-gradient(180deg, #52a8ff 0%, #81d0ff 58%, #dff4ff 100%)",
+            "radial-gradient(circle at 50% 10%, rgba(255,255,255,0.14) 0%, rgba(255,255,255,0.03) 18%, rgba(255,255,255,0) 34%)",
+            "linear-gradient(180deg, rgba(255,255,255,0.05) 0%, rgba(255,255,255,0.0) 26%, rgba(0,0,0,0.12) 74%, rgba(0,0,0,0.3) 100%)",
           ].join(", "),
         }}
       />
