@@ -43,6 +43,7 @@ type SquishyDebugApi = {
   setPrismDimensions: (dimensions: Partial<PrismDimensions>) => void;
   setOrientation: (orientation: Partial<Orientation>) => void;
   spawn: (mode?: "drop" | "smash") => void;
+  toggleDayNightCycle: () => void;
   toggleFirstPerson: () => void;
   toggleMouseCapture: () => void;
   toggleWireframe: () => void;
@@ -410,6 +411,7 @@ export default function SquishySim() {
       },
       toggleSprings: () => renderer.toggleSprings(),
       toggleWireframe: () => renderer.toggleWireframe(),
+      toggleDayNightCycle: () => renderer.toggleDayNightCycle(),
       toggleFirstPerson,
       toggleMouseCapture: () => renderer.toggleMouseCapture(),
     });
@@ -435,6 +437,7 @@ export default function SquishySim() {
         }
         actionsRef.current?.drop();
       },
+      toggleDayNightCycle: () => actionsRef.current?.toggleDayNightCycle(),
       toggleFirstPerson,
       toggleMouseCapture: () => actionsRef.current?.toggleMouseCapture(),
       toggleWireframe: () => actionsRef.current?.toggleWireframe(),

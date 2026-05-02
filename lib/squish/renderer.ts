@@ -1,7 +1,7 @@
 import { PARTICLE_RADIUS, SURFACE_CONTACT_HALF_EXTENT, isFlatContactShape } from "./contact";
 import { getPoseCenter, getPoseRadius, rotateOffset } from "./orientation";
 import { resolveBodyContacts, stepSim } from "./sim-core";
-import { buildTerrainMesh, getGroundHeight, GROUND_FLAT_RADIUS } from "./terrain";
+import { buildTerrainMesh, getGroundHeight, GROUND_BASE_Y, GROUND_FLAT_RADIUS } from "./terrain";
 import type { Config, Orientation, SimState } from "./types";
 
 const BODY_VS = `#version 300 es
@@ -280,8 +280,19 @@ const MAX_GRAB_RADIUS = PARTICLE_RADIUS * 6;
 const GRAB_RADIUS_SCALE = 0.32;
 const BODY_ALPHA = 0.84;
 const DAY_NIGHT_CYCLE_SPEED = 0.07;
-const SPACE_SKY_START_HEIGHT = 148;
-const SPACE_SKY_FULL_HEIGHT = 160;
+const JENGA_VERTICAL_SPACING = 0.38;
+const JENGA_VERTICAL_PARTICLES = 3;
+const JENGA_BLOCK_HEIGHT = JENGA_VERTICAL_SPACING * (JENGA_VERTICAL_PARTICLES - 1);
+const JENGA_LAYER_STEP = JENGA_BLOCK_HEIGHT + PARTICLE_RADIUS * 2;
+const SPACE_SKY_START_LAYER = 16;
+const SPACE_SKY_FULL_LAYER = 18;
+const SPACE_SKY_START_HEIGHT = GROUND_BASE_Y + PARTICLE_RADIUS + (SPACE_SKY_START_LAYER - 1) * JENGA_LAYER_STEP + JENGA_BLOCK_HEIGHT;
+const SPACE_SKY_FULL_HEIGHT = GROUND_BASE_Y + PARTICLE_RADIUS + (SPACE_SKY_FULL_LAYER - 1) * JENGA_LAYER_STEP + JENGA_BLOCK_HEIGHT;
+const DEFAULT_STATIC_SUN_DIR = (() => {
+  const raw: [number, number, number] = [0.42, 0.9, 0.2];
+  const length = Math.hypot(raw[0], raw[1], raw[2]) || 1;
+  return [raw[0] / length, raw[1] / length, raw[2] / length] as [number, number, number];
+})();
 const FIRST_PERSON_HALF_EXTENT = 1;
 const FIRST_PERSON_EYE_OFFSET = 0.36;
 const FIRST_PERSON_MOUSE_SENSITIVITY = 0.0022;
@@ -385,13 +396,14 @@ function mixVec3(a: number[], b: number[], t: number) {
   ] as [number, number, number];
 }
 
-function getSceneLighting(time: number, focus: [number, number, number]) {
-  const phase = time * DAY_NIGHT_CYCLE_SPEED;
-  const sunDir = norm3([
-    Math.cos(phase) * 0.82,
-    Math.sin(phase) * 0.96 + 0.12,
-    Math.sin(phase * 0.61) * 0.45,
-  ]) as [number, number, number];
+function getSceneLighting(time: number, focus: [number, number, number], dayNightCycleEnabled: boolean) {
+  const sunDir = dayNightCycleEnabled
+    ? norm3([
+        Math.cos(time * DAY_NIGHT_CYCLE_SPEED) * 0.82,
+        Math.sin(time * DAY_NIGHT_CYCLE_SPEED) * 0.96 + 0.12,
+        Math.sin(time * DAY_NIGHT_CYCLE_SPEED * 0.61) * 0.45,
+      ]) as [number, number, number]
+    : DEFAULT_STATIC_SUN_DIR;
 
   const dayMix = smoothstep(-0.16, 0.18, sunDir[1]);
   const moonDir = [-sunDir[0], -sunDir[1], -sunDir[2]] as [number, number, number];
@@ -588,6 +600,7 @@ export function createRenderer(canvas: HTMLCanvasElement) {
   let renderBodies: RenderBody[] = [];
   let wireframe = false;
   let showSprings = false;
+  let dayNightCycleEnabled = true;
   let springVAO: WebGLVertexArrayObject | null = null;
   let springBuf: WebGLBuffer | null = null;
   let axisVAO: WebGLVertexArrayObject | null = null;
@@ -1648,7 +1661,11 @@ export function createRenderer(canvas: HTMLCanvasElement) {
     const id = mat4Id();
     const time = performance.now() * 0.001;
     const spaceMix = smoothstep(SPACE_SKY_START_HEIGHT, SPACE_SKY_FULL_HEIGHT, eye[1]);
-    const lighting = getSceneLighting(time, firstPerson?.active ? firstPerson.position : target as [number, number, number]);
+    const lighting = getSceneLighting(
+      time,
+      firstPerson?.active ? firstPerson.position : target as [number, number, number],
+      dayNightCycleEnabled
+    );
 
     gl.disable(gl.DEPTH_TEST);
     gl.depthMask(false);
@@ -1767,6 +1784,10 @@ export function createRenderer(canvas: HTMLCanvasElement) {
     },
     toggleWireframe() {
       wireframe = !wireframe;
+    },
+    toggleDayNightCycle() {
+      dayNightCycleEnabled = !dayNightCycleEnabled;
+      draw();
     },
     resize() {
       const dpr = window.devicePixelRatio || 1;

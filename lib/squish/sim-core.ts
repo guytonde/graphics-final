@@ -52,6 +52,7 @@ export interface Actions {
   clear: () => void;
   toggleSprings: () => void;
   toggleWireframe: () => void;
+  toggleDayNightCycle: () => void;
   toggleFirstPerson: () => void;
   toggleMouseCapture: () => void;
 }
