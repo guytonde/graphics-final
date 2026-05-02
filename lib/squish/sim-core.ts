@@ -12,8 +12,10 @@ const FLOOR_BOUNCE = 0.8;
 const FLOOR_FRICTION = 0.85;
 const INTER_BODY_RESTITUTION = 0.1;
 const INTER_BODY_FRICTION = 0.8;
-const FLAT_BODY_CONTACT_PADDING = PARTICLE_RADIUS;
+const FLAT_BODY_CONTACT_PADDING = PARTICLE_RADIUS * 0.35;
 const FLAT_BODY_PROXY_BAND = SURFACE_CONTACT_HALF_EXTENT * 4;
+const FLAT_BODY_PROXY_TANGENT_PADDING = PARTICLE_RADIUS;
+const FLAT_BODY_PROXY_MIN_SUPPORT_SPAN = PARTICLE_RADIUS * 1.25;
 const MAX_ADAPTIVE_MOTION_SUBSTEPS = 6;
 const MAX_TRAVEL_PER_MOTION_STEP = SURFACE_CONTACT_HALF_EXTENT * 0.5;
 
@@ -22,6 +24,24 @@ const NEIGHBOR_OFFSETS = [-1, 0, 1].flatMap(dx =>
     [-1, 0, 1].map(dz => ({ dx, dy, dz }))
   )
 );
+
+type AxisIndex = 0 | 1 | 2;
+
+interface AxisRange {
+  min: number;
+  max: number;
+}
+
+interface FlatBodyProxyContact {
+  nx: number;
+  ny: number;
+  nz: number;
+  overlap: number;
+  tangentAxisA: AxisIndex;
+  tangentAxisB: AxisIndex;
+  tangentA: AxisRange;
+  tangentB: AxisRange;
+}
 
 export interface Actions {
   drop: () => void;
@@ -275,9 +295,7 @@ function resolveFlatBodyProxyContacts(bodies: SimState[]) {
         -nx * overlap * w_a,
         -ny * overlap * w_a,
         -nz * overlap * w_a,
-        nx,
-        ny,
-        nz,
+        contact,
         true
       );
       applyLocalizedBodyProxyCorrection(
@@ -285,25 +303,43 @@ function resolveFlatBodyProxyContacts(bodies: SimState[]) {
         nx * overlap * w_b,
         ny * overlap * w_b,
         nz * overlap * w_b,
-        nx,
-        ny,
-        nz,
+        contact,
         false
       );
     }
   }
 }
 
-function getFlatBodyProxyContact(a: SimState, b: SimState) {
+function getFlatBodyProxyContact(a: SimState, b: SimState): FlatBodyProxyContact | null {
   const aBounds = getPoseBounds(a.pos);
   const bBounds = getPoseBounds(b.pos);
 
-  const px = Math.min(aBounds.maxX + FLAT_BODY_CONTACT_PADDING, bBounds.maxX + FLAT_BODY_CONTACT_PADDING)
-    - Math.max(aBounds.minX - FLAT_BODY_CONTACT_PADDING, bBounds.minX - FLAT_BODY_CONTACT_PADDING);
-  const py = Math.min(aBounds.maxY + FLAT_BODY_CONTACT_PADDING, bBounds.maxY + FLAT_BODY_CONTACT_PADDING)
-    - Math.max(aBounds.minY - FLAT_BODY_CONTACT_PADDING, bBounds.minY - FLAT_BODY_CONTACT_PADDING);
-  const pz = Math.min(aBounds.maxZ + FLAT_BODY_CONTACT_PADDING, bBounds.maxZ + FLAT_BODY_CONTACT_PADDING)
-    - Math.max(aBounds.minZ - FLAT_BODY_CONTACT_PADDING, bBounds.minZ - FLAT_BODY_CONTACT_PADDING);
+  const xOverlap = getAxisRangeOverlap(aBounds.minX, aBounds.maxX, bBounds.minX, bBounds.maxX);
+  const yOverlap = getAxisRangeOverlap(aBounds.minY, aBounds.maxY, bBounds.minY, bBounds.maxY);
+  const zOverlap = getAxisRangeOverlap(aBounds.minZ, aBounds.maxZ, bBounds.minZ, bBounds.maxZ);
+
+  const paddedXOverlap = getAxisRangeOverlap(
+    aBounds.minX - FLAT_BODY_CONTACT_PADDING,
+    aBounds.maxX + FLAT_BODY_CONTACT_PADDING,
+    bBounds.minX - FLAT_BODY_CONTACT_PADDING,
+    bBounds.maxX + FLAT_BODY_CONTACT_PADDING
+  );
+  const paddedYOverlap = getAxisRangeOverlap(
+    aBounds.minY - FLAT_BODY_CONTACT_PADDING,
+    aBounds.maxY + FLAT_BODY_CONTACT_PADDING,
+    bBounds.minY - FLAT_BODY_CONTACT_PADDING,
+    bBounds.maxY + FLAT_BODY_CONTACT_PADDING
+  );
+  const paddedZOverlap = getAxisRangeOverlap(
+    aBounds.minZ - FLAT_BODY_CONTACT_PADDING,
+    aBounds.maxZ + FLAT_BODY_CONTACT_PADDING,
+    bBounds.minZ - FLAT_BODY_CONTACT_PADDING,
+    bBounds.maxZ + FLAT_BODY_CONTACT_PADDING
+  );
+
+  const px = paddedXOverlap.max - paddedXOverlap.min;
+  const py = paddedYOverlap.max - paddedYOverlap.min;
+  const pz = paddedZOverlap.max - paddedZOverlap.min;
 
   if (px <= 0 || py <= 0 || pz <= 0) return null;
 
@@ -314,12 +350,42 @@ function getFlatBodyProxyContact(a: SimState, b: SimState) {
   const dz = bcz - acz;
 
   if (py <= px && py <= pz) {
-    return { nx: 0, ny: dy >= 0 ? 1 : -1, nz: 0, overlap: py };
+    if (!hasUsableFlatBodySupport(xOverlap, zOverlap)) return null;
+    return {
+      nx: 0,
+      ny: dy >= 0 ? 1 : -1,
+      nz: 0,
+      overlap: py,
+      tangentAxisA: 0,
+      tangentAxisB: 2,
+      tangentA: xOverlap,
+      tangentB: zOverlap,
+    };
   }
   if (px <= pz) {
-    return { nx: dx >= 0 ? 1 : -1, ny: 0, nz: 0, overlap: px };
+    if (!hasUsableFlatBodySupport(yOverlap, zOverlap)) return null;
+    return {
+      nx: dx >= 0 ? 1 : -1,
+      ny: 0,
+      nz: 0,
+      overlap: px,
+      tangentAxisA: 1,
+      tangentAxisB: 2,
+      tangentA: yOverlap,
+      tangentB: zOverlap,
+    };
   }
-  return { nx: 0, ny: 0, nz: dz >= 0 ? 1 : -1, overlap: pz };
+  if (!hasUsableFlatBodySupport(xOverlap, yOverlap)) return null;
+  return {
+    nx: 0,
+    ny: 0,
+    nz: dz >= 0 ? 1 : -1,
+    overlap: pz,
+    tangentAxisA: 0,
+    tangentAxisB: 1,
+    tangentA: xOverlap,
+    tangentB: yOverlap,
+  };
 }
 
 function getBodyContactWeights(
@@ -344,11 +410,10 @@ function applyLocalizedBodyProxyCorrection(
   dx: number,
   dy: number,
   dz: number,
-  nx: number,
-  ny: number,
-  nz: number,
+  contact: FlatBodyProxyContact,
   towardPositiveNormal: boolean
 ) {
+  const { nx, ny, nz, tangentAxisA, tangentAxisB, tangentA, tangentB } = contact;
   let support = towardPositiveNormal ? -Infinity : Infinity;
 
   for (let i = 0; i < body.N; i++) {
@@ -376,7 +441,10 @@ function applyLocalizedBodyProxyCorrection(
     const depth = towardPositiveNormal ? support - projection : projection - support;
     if (depth >= FLAT_BODY_PROXY_BAND) continue;
 
-    const weight = 1 - depth / FLAT_BODY_PROXY_BAND;
+    const faceWeight = 1 - depth / FLAT_BODY_PROXY_BAND;
+    const tangentWeightA = getAxisRangeInfluence(body.pos[base + tangentAxisA], tangentA);
+    const tangentWeightB = getAxisRangeInfluence(body.pos[base + tangentAxisB], tangentB);
+    const weight = faceWeight * tangentWeightA * tangentWeightB;
     if (weight <= 0) continue;
 
     body.pos[base] += dx * weight;
@@ -397,6 +465,30 @@ function applyLocalizedBodyProxyCorrection(
     body.prev[base + 1] += ny * normal_vel * weight;
     body.prev[base + 2] += nz * normal_vel * weight;
   }
+}
+
+function getAxisRangeOverlap(aMin: number, aMax: number, bMin: number, bMax: number): AxisRange {
+  return {
+    min: Math.max(aMin, bMin),
+    max: Math.min(aMax, bMax),
+  };
+}
+
+function hasUsableFlatBodySupport(a: AxisRange, b: AxisRange) {
+  return (a.max - a.min) >= FLAT_BODY_PROXY_MIN_SUPPORT_SPAN
+    && (b.max - b.min) >= FLAT_BODY_PROXY_MIN_SUPPORT_SPAN;
+}
+
+function getAxisRangeInfluence(value: number, range: AxisRange) {
+  if (value < range.min - FLAT_BODY_PROXY_TANGENT_PADDING) return 0;
+  if (value > range.max + FLAT_BODY_PROXY_TANGENT_PADDING) return 0;
+  if (value < range.min) {
+    return 1 - (range.min - value) / FLAT_BODY_PROXY_TANGENT_PADDING;
+  }
+  if (value > range.max) {
+    return 1 - (value - range.max) / FLAT_BODY_PROXY_TANGENT_PADDING;
+  }
+  return 1;
 }
 
 function separateParticles(a: SimState, ai: number, b: SimState, bi: number) {

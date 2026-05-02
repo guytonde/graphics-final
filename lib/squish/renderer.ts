@@ -78,15 +78,64 @@ const FLOOR_FS = `#version 300 es
 precision highp float;
 in vec2 vUV;
 out vec4 fc;
+
+float hash21(vec2 p) {
+  p = fract(p * vec2(123.34, 456.21));
+  p += dot(p, p + 45.32);
+  return fract(p.x * p.y);
+}
+
+float noise21(vec2 p) {
+  vec2 i = floor(p);
+  vec2 f = fract(p);
+  vec2 u = f * f * (3.0 - 2.0 * f);
+
+  float a = hash21(i);
+  float b = hash21(i + vec2(1.0, 0.0));
+  float c = hash21(i + vec2(0.0, 1.0));
+  float d = hash21(i + vec2(1.0, 1.0));
+
+  return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}
+
+float fbm(vec2 p) {
+  float value = 0.0;
+  float amp = 0.5;
+  for (int i = 0; i < 4; i++) {
+    value += noise21(p) * amp;
+    p = p * 2.03 + vec2(17.1, -9.4);
+    amp *= 0.5;
+  }
+  return value;
+}
+
 void main() {
-  vec2 patchUV = vUV * 0.18;
-  float patchMix = 0.5 + 0.5 * sin(patchUV.x * 1.7 + patchUV.y * 1.2);
-  vec3 grassA = vec3(0.18, 0.56, 0.18);
-  vec3 grassB = vec3(0.27, 0.68, 0.22);
-  vec3 color = mix(grassA, grassB, patchMix);
-  float blades = 0.5 + 0.5 * sin(vUV.x * 5.5 + vUV.y * 1.6);
-  color *= 0.92 + blades * 0.12;
-  color *= 0.94 + 0.06 * sin((vUV.x - vUV.y) * 0.8);
+  vec2 macroUV = vUV * 0.06;
+  vec2 tuftUV = vec2(vUV.x * 0.82 + vUV.y * 0.24, vUV.y * 1.08 - vUV.x * 0.1);
+
+  float broad = fbm(macroUV);
+  float patches = fbm(macroUV * 2.4 + vec2(8.0, 3.0));
+  float tuftMask = smoothstep(0.32, 0.78, fbm(tuftUV * 0.95 + vec2(2.0, 11.0)));
+  float tuftBands = 0.5 + 0.5 * sin(tuftUV.x * 16.0 + fbm(tuftUV * 0.45) * 5.0);
+  float tuftFine = 0.5 + 0.5 * sin(tuftUV.x * 34.0 + tuftUV.y * 6.0);
+  float blades = mix(0.9, 1.1, tuftBands * 0.7 + tuftFine * 0.3) * mix(0.84, 1.0, tuftMask);
+
+  vec3 deepGrass = vec3(0.13, 0.43, 0.12);
+  vec3 midGrass = vec3(0.2, 0.58, 0.17);
+  vec3 brightGrass = vec3(0.34, 0.76, 0.24);
+  vec3 dryGrass = vec3(0.42, 0.52, 0.2);
+
+  float lushMix = smoothstep(0.22, 0.82, broad * 0.65 + patches * 0.35);
+  vec3 color = mix(deepGrass, brightGrass, lushMix);
+  color = mix(color, midGrass, smoothstep(0.3, 0.8, patches));
+
+  float worn = smoothstep(0.62, 0.86, fbm(macroUV * 0.72 + vec2(-12.0, 7.0))) * 0.22;
+  color = mix(color, dryGrass, worn);
+  color *= blades;
+
+  float coolShade = 0.94 + 0.08 * fbm(macroUV * 0.55 + vec2(30.0, -14.0));
+  float speckle = smoothstep(0.9, 0.985, noise21(vUV * 2.8 + vec2(4.0, 9.0))) * 0.05;
+  color = color * coolShade + vec3(0.03, 0.05, 0.02) * speckle;
   fc = vec4(color, 1.);
 }`;
 

@@ -95,9 +95,7 @@ export function ActionBar({ actionsRef }: { actionsRef: MutableRefObject<Actions
     <>
       <div style={s.bar}>
         <Btn label="Spawn" onClick={() => actionsRef.current?.drop()}>▼ Spawn</Btn>
-        <Btn label="Smash" onClick={() => actionsRef.current?.smash()}>💥 Smash</Btn>
         <Btn label="Autobuild" onClick={() => actionsRef.current?.autobuild()}>▤ Autobuild</Btn>
-        <Btn label="Melt" onClick={() => actionsRef.current?.melt()}>~ Melt</Btn>
         <Btn label="Clear" onClick={() => actionsRef.current?.clear()}>↺ Clear</Btn>
         <Btn label="Springs" onClick={() => actionsRef.current?.toggleSprings()}>⊞ Springs</Btn>
         <Btn label="Wire" onClick={() => actionsRef.current?.toggleWireframe()}>◈ Wire</Btn>
