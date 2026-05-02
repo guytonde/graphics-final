@@ -605,8 +605,15 @@ type DebugSnapshot = {
     id: number;
     shape: ShapeName;
     dropped: boolean;
+    center: ReturnType<typeof getPoseCenter>;
     bounds: ReturnType<typeof getPoseBounds>;
   }>;
+  camera: {
+    theta: number;
+    phi: number;
+    dist: number;
+    target: [number, number, number];
+  } | null;
   diagnostics: ReturnType<typeof createSceneDiagnostics>;
 };
 
@@ -748,8 +755,10 @@ export default function SquishySim() {
       id: body.id,
       shape: body.shape,
       dropped: body.dropped,
+      center: getPoseCenter(body.pos),
       bounds: getPoseBounds(body.pos),
     })),
+    camera: rendererRef.current?.getCameraState() ?? null,
     diagnostics: createSceneDiagnostics(bodiesRef.current),
   });
 

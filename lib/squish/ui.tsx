@@ -83,7 +83,7 @@ export function ShapeBar({ onShape }: { onShape: (shape: ShapeName) => void }) {
 export function ActionBar({ actionsRef }: { actionsRef: MutableRefObject<Actions | null> }) {
   return (
     <>
-      <p style={s.hint}>Drag to orbit · Scroll to zoom · Shape buttons swap the next preview object</p>
+      <p style={s.hint}>Left drag empty to orbit or a body to grab · Right drag or shift-drag to pan · Scroll to zoom</p>
       <div style={s.bar}>
         <Btn label="Spawn" onClick={() => actionsRef.current?.drop()}>▼ Spawn</Btn>
         <Btn label="Smash" onClick={() => actionsRef.current?.smash()}>💥 Smash</Btn>

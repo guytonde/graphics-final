@@ -1,5 +1,5 @@
 import { PARTICLE_RADIUS } from "./contact";
-import { getPoseCenter, getPoseRadius, rotateOffset } from "./orientation";
+import { getPoseCenter, getPoseRadius, rotateOffset, translatePose } from "./orientation";
 import { stepSim } from "./sim-core";
 import type { Config, Orientation, SimState } from "./types";
 
@@ -91,6 +91,9 @@ out vec4 fc;
 void main() {
   fc = vec4(uColor, 1.0);
 }`;
+
+const CAMERA_FOV = Math.PI / 4;
+const WORLD_UP: [number, number, number] = [0, 1, 0];
 
 const cross3 = (a: number[], b: number[]) => [
   a[1] * b[2] - a[2] * b[1],
@@ -215,6 +218,17 @@ interface RenderBody {
   faceData: Array<{ v2p: number[]; idx: Uint32Array; pos: Float32Array; nrm: Float32Array }>;
 }
 
+type PointerMode = "orbit" | "pan" | "grab" | null;
+
+interface GrabState {
+  body: SimState;
+  anchorParticle: number;
+  anchorOffset: [number, number, number];
+  planeOrigin: [number, number, number];
+  planeNormal: [number, number, number];
+  targetPoint: [number, number, number];
+}
+
 function mkFaceMesh(
   gl: WebGL2RenderingContext,
   prog: WebGLProgram,
@@ -293,7 +307,9 @@ export function createRenderer(canvas: HTMLCanvasElement) {
   let phi = 0.3;
   let dist = 11;
   const target = [0, 0.5, 0];
-  let dragging = false;
+  let activePointerId: number | null = null;
+  let pointerMode: PointerMode = null;
+  let grabState: GrabState | null = null;
   let lx = 0;
   let ly = 0;
 
@@ -306,29 +322,287 @@ export function createRenderer(canvas: HTMLCanvasElement) {
     ] as [number, number, number];
   };
 
-  const onDown = (e: MouseEvent) => {
-    dragging = true;
+  const getCameraBasis = () => {
+    const eye = getEye();
+    const forward = norm3([target[0] - eye[0], target[1] - eye[1], target[2] - eye[2]]);
+    const right = norm3(cross3(forward, WORLD_UP));
+    const up = norm3(cross3(right, forward));
+    return { eye, forward, right, up };
+  };
+
+  const getMouseRay = (clientX: number, clientY: number) => {
+    const rect = canvas.getBoundingClientRect();
+    const nx = ((clientX - rect.left) / rect.width) * 2 - 1;
+    const ny = ((clientY - rect.top) / rect.height) * -2 + 1;
+    const aspect = rect.width / rect.height;
+    const t = Math.tan(CAMERA_FOV * 0.5);
+    const { eye, forward, right, up } = getCameraBasis();
+    const dir = norm3([
+      forward[0] + right[0] * nx * aspect * t + up[0] * ny * t,
+      forward[1] + right[1] * nx * aspect * t + up[1] * ny * t,
+      forward[2] + right[2] * nx * aspect * t + up[2] * ny * t,
+    ]);
+
+    return { origin: eye, dir };
+  };
+
+  const intersectRayPlane = (
+    origin: [number, number, number],
+    dir: number[],
+    planeOrigin: [number, number, number],
+    planeNormal: [number, number, number]
+  ) => {
+    const denom = dir[0] * planeNormal[0] + dir[1] * planeNormal[1] + dir[2] * planeNormal[2];
+    if (Math.abs(denom) < 1e-6) return null;
+
+    const ox = planeOrigin[0] - origin[0];
+    const oy = planeOrigin[1] - origin[1];
+    const oz = planeOrigin[2] - origin[2];
+    const t = (ox * planeNormal[0] + oy * planeNormal[1] + oz * planeNormal[2]) / denom;
+    if (t < 0) return null;
+
+    return [
+      origin[0] + dir[0] * t,
+      origin[1] + dir[1] * t,
+      origin[2] + dir[2] * t,
+    ] as [number, number, number];
+  };
+
+  const rayTri = (
+    origin: [number, number, number],
+    dir: number[],
+    ax: number,
+    ay: number,
+    az: number,
+    bx: number,
+    by: number,
+    bz: number,
+    cx: number,
+    cy: number,
+    cz: number
+  ) => {
+    const abx = bx - ax;
+    const aby = by - ay;
+    const abz = bz - az;
+    const acx = cx - ax;
+    const acy = cy - ay;
+    const acz = cz - az;
+    const px = dir[1] * acz - dir[2] * acy;
+    const py = dir[2] * acx - dir[0] * acz;
+    const pz = dir[0] * acy - dir[1] * acx;
+    const det = abx * px + aby * py + abz * pz;
+    if (Math.abs(det) < 1e-7) return null;
+
+    const invDet = 1 / det;
+    const tx = origin[0] - ax;
+    const ty = origin[1] - ay;
+    const tz = origin[2] - az;
+    const u = (tx * px + ty * py + tz * pz) * invDet;
+    if (u < 0 || u > 1) return null;
+
+    const qx = ty * abz - tz * aby;
+    const qy = tz * abx - tx * abz;
+    const qz = tx * aby - ty * abx;
+    const v = (dir[0] * qx + dir[1] * qy + dir[2] * qz) * invDet;
+    if (v < 0 || u + v > 1) return null;
+
+    const t = (acx * qx + acy * qy + acz * qz) * invDet;
+    if (t < 0) return null;
+
+    return t;
+  };
+
+  const pickDroppedBody = (clientX: number, clientY: number) => {
+    const { origin, dir } = getMouseRay(clientX, clientY);
+    let best: {
+      body: SimState;
+      hitPoint: [number, number, number];
+    } | null = null;
+    let bestT = Infinity;
+
+    for (const rb of renderBodies) {
+      if (!rb.body.dropped) continue;
+
+      for (const fd of rb.faceData) {
+        for (let i = 0; i < fd.idx.length; i += 3) {
+          const ia = fd.idx[i] * 3;
+          const ib = fd.idx[i + 1] * 3;
+          const ic = fd.idx[i + 2] * 3;
+          const t = rayTri(
+            origin,
+            dir,
+            fd.pos[ia], fd.pos[ia + 1], fd.pos[ia + 2],
+            fd.pos[ib], fd.pos[ib + 1], fd.pos[ib + 2],
+            fd.pos[ic], fd.pos[ic + 1], fd.pos[ic + 2]
+          );
+          if (t === null || t >= bestT) continue;
+
+          bestT = t;
+          best = {
+            body: rb.body,
+            hitPoint: [
+              origin[0] + dir[0] * t,
+              origin[1] + dir[1] * t,
+              origin[2] + dir[2] * t,
+            ],
+          };
+        }
+      }
+    }
+
+    if (!best) return null;
+
+    let anchorParticle = 0;
+    let bestDistSq = Infinity;
+    for (let i = 0; i < best.body.N; i++) {
+      if (!best.body.surfaceParticleMask[i]) continue;
+      const base = i * 3;
+      const dx = best.body.pos[base] - best.hitPoint[0];
+      const dy = best.body.pos[base + 1] - best.hitPoint[1];
+      const dz = best.body.pos[base + 2] - best.hitPoint[2];
+      const distSq = dx * dx + dy * dy + dz * dz;
+      if (distSq < bestDistSq) {
+        bestDistSq = distSq;
+        anchorParticle = i;
+      }
+    }
+
+    const anchorBase = anchorParticle * 3;
+    return {
+      body: best.body,
+      anchorParticle,
+      hitPoint: best.hitPoint,
+      anchorOffset: [
+        best.hitPoint[0] - best.body.pos[anchorBase],
+        best.hitPoint[1] - best.body.pos[anchorBase + 1],
+        best.hitPoint[2] - best.body.pos[anchorBase + 2],
+      ] as [number, number, number],
+      planeNormal: [...getCameraBasis().forward] as [number, number, number],
+    };
+  };
+
+  const syncPrevToPos = (body: SimState) => {
+    body.prev.set(body.pos);
+  };
+
+  const applyGrabConstraint = () => {
+    if (!grabState) return;
+
+    const anchorBase = grabState.anchorParticle * 3;
+    const currentPoint: [number, number, number] = [
+      grabState.body.pos[anchorBase] + grabState.anchorOffset[0],
+      grabState.body.pos[anchorBase + 1] + grabState.anchorOffset[1],
+      grabState.body.pos[anchorBase + 2] + grabState.anchorOffset[2],
+    ];
+
+    const dx = grabState.targetPoint[0] - currentPoint[0];
+    const dy = grabState.targetPoint[1] - currentPoint[1];
+    const dz = grabState.targetPoint[2] - currentPoint[2];
+
+    if (Math.abs(dx) < 1e-6 && Math.abs(dy) < 1e-6 && Math.abs(dz) < 1e-6) {
+      syncPrevToPos(grabState.body);
+      return;
+    }
+
+    translatePose(grabState.body.pos, grabState.body.prev, dx, dy, dz);
+    syncPrevToPos(grabState.body);
+  };
+
+  const panCamera = (dx: number, dy: number) => {
+    const rect = canvas.getBoundingClientRect();
+    const { right, up } = getCameraBasis();
+    const worldHeight = 2 * Math.tan(CAMERA_FOV * 0.5) * dist;
+    const worldWidth = worldHeight * (rect.width / rect.height);
+    const sx = -(dx / rect.width) * worldWidth;
+    const sy = (dy / rect.height) * worldHeight;
+
+    target[0] += right[0] * sx + up[0] * sy;
+    target[1] += right[1] * sx + up[1] * sy;
+    target[2] += right[2] * sx + up[2] * sy;
+  };
+
+  const beginGrab = (e: PointerEvent) => {
+    const pick = pickDroppedBody(e.clientX, e.clientY);
+    if (!pick) return false;
+
+    pointerMode = "grab";
+    grabState = {
+      body: pick.body,
+      anchorParticle: pick.anchorParticle,
+      anchorOffset: pick.anchorOffset,
+      planeOrigin: pick.hitPoint,
+      planeNormal: pick.planeNormal,
+      targetPoint: pick.hitPoint,
+    };
+    canvas.style.cursor = "grabbing";
+    return true;
+  };
+
+  const onPointerDown = (e: PointerEvent) => {
+    e.preventDefault();
+    activePointerId = e.pointerId;
+    canvas.setPointerCapture(e.pointerId);
     lx = e.clientX;
     ly = e.clientY;
+
+    if (e.button === 2 || e.button === 1 || (e.button === 0 && e.shiftKey)) {
+      pointerMode = "pan";
+      canvas.style.cursor = "grabbing";
+      return;
+    }
+
+    if (e.button === 0 && beginGrab(e)) {
+      return;
+    }
+
+    pointerMode = "orbit";
+    canvas.style.cursor = "grabbing";
   };
-  const onUp = () => {
-    dragging = false;
+  const onPointerUp = (e: PointerEvent) => {
+    if (activePointerId !== e.pointerId) return;
+    grabState = null;
+    pointerMode = null;
+    activePointerId = null;
+    canvas.style.cursor = "grab";
+    if (canvas.hasPointerCapture(e.pointerId)) {
+      canvas.releasePointerCapture(e.pointerId);
+    }
   };
-  const onMove = (e: MouseEvent) => {
-    if (!dragging) return;
-    theta -= (e.clientX - lx) * 0.007;
-    phi = Math.max(-1.4, Math.min(1.4, phi - (e.clientY - ly) * 0.007));
+  const onPointerMove = (e: PointerEvent) => {
+    if (activePointerId !== e.pointerId || !pointerMode) return;
+    const dx = e.clientX - lx;
+    const dy = e.clientY - ly;
+
+    if (pointerMode === "orbit") {
+      theta -= dx * 0.007;
+      phi = Math.max(-1.4, Math.min(1.4, phi - dy * 0.007));
+    } else if (pointerMode === "pan") {
+      panCamera(dx, dy);
+    } else if (pointerMode === "grab" && grabState) {
+      const ray = getMouseRay(e.clientX, e.clientY);
+      const hit = intersectRayPlane(ray.origin, ray.dir, grabState.planeOrigin, grabState.planeNormal);
+      if (hit) {
+        grabState.targetPoint = hit;
+      }
+    }
+
     lx = e.clientX;
     ly = e.clientY;
   };
   const onWheel = (e: WheelEvent) => {
     dist = Math.max(3, Math.min(22, dist + e.deltaY * 0.01));
   };
+  const onContextMenu = (e: MouseEvent) => {
+    e.preventDefault();
+  };
 
-  canvas.addEventListener("mousedown", onDown);
-  canvas.addEventListener("mouseup", onUp);
-  canvas.addEventListener("mousemove", onMove);
+  canvas.style.cursor = "grab";
+  canvas.addEventListener("pointerdown", onPointerDown);
+  canvas.addEventListener("pointerup", onPointerUp);
+  canvas.addEventListener("pointercancel", onPointerUp);
+  canvas.addEventListener("pointermove", onPointerMove);
   canvas.addEventListener("wheel", onWheel, { passive: true });
+  canvas.addEventListener("contextmenu", onContextMenu);
 
   function disposeBodyMeshes() {
     for (const rb of renderBodies) {
@@ -534,7 +808,7 @@ export function createRenderer(canvas: HTMLCanvasElement) {
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
     const eye = getEye();
-    const proj = mat4Persp(Math.PI / 4, canvas.width / canvas.height, 0.1, 80);
+    const proj = mat4Persp(CAMERA_FOV, canvas.width / canvas.height, 0.1, 80);
     const view = mat4LookAt(eye, target, [0, 1, 0]);
     const mvp = mat4Mul(proj, view);
     const id = mat4Id();
@@ -598,6 +872,7 @@ export function createRenderer(canvas: HTMLCanvasElement) {
     },
     update(cfg: Config) {
       stepSim(bodies, cfg);
+      applyGrabConstraint();
       syncFaces();
       draw();
     },
@@ -616,12 +891,22 @@ export function createRenderer(canvas: HTMLCanvasElement) {
       canvas.height = Math.floor(canvas.clientHeight * dpr);
       draw();
     },
+    getCameraState() {
+      return {
+        theta,
+        phi,
+        dist,
+        target: [...target] as [number, number, number],
+      };
+    },
     dispose() {
       disposeBodyMeshes();
-      canvas.removeEventListener("mousedown", onDown);
-      canvas.removeEventListener("mouseup", onUp);
-      canvas.removeEventListener("mousemove", onMove);
+      canvas.removeEventListener("pointerdown", onPointerDown);
+      canvas.removeEventListener("pointerup", onPointerUp);
+      canvas.removeEventListener("pointercancel", onPointerUp);
+      canvas.removeEventListener("pointermove", onPointerMove);
       canvas.removeEventListener("wheel", onWheel);
+      canvas.removeEventListener("contextmenu", onContextMenu);
       gl.deleteBuffer(floorBuf);
       gl.deleteVertexArray(floorVAO);
       if (springBuf) gl.deleteBuffer(springBuf);
