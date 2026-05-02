@@ -73,9 +73,9 @@ export function SliderPanel({
 export function ShapeBar({ onShape }: { onShape: (shape: ShapeName) => void }) {
   return (
     <div style={{ ...s.bar, bottom: 64 }}>
-      <Btn onClick={() => onShape("prism")}>▰ Prism</Btn>
-      <Btn onClick={() => onShape("sphere")}>⬤ Sphere</Btn>
-      <Btn onClick={() => onShape("tower")}>▮ Tower</Btn>
+      <Btn label="Prism" onClick={() => onShape("prism")}>▰ Prism</Btn>
+      <Btn label="Sphere" onClick={() => onShape("sphere")}>⬤ Sphere</Btn>
+      <Btn label="Tower" onClick={() => onShape("tower")}>▮ Tower</Btn>
     </div>
   );
 }
@@ -85,12 +85,12 @@ export function ActionBar({ actionsRef }: { actionsRef: MutableRefObject<Actions
     <>
       <p style={s.hint}>Drag to orbit · Scroll to zoom · Shape buttons swap the next preview object</p>
       <div style={s.bar}>
-        <Btn onClick={() => actionsRef.current?.drop()}>▼ Spawn</Btn>
-        <Btn onClick={() => actionsRef.current?.smash()}>💥 Smash</Btn>
-        <Btn onClick={() => actionsRef.current?.melt()}>~ Melt</Btn>
-        <Btn onClick={() => actionsRef.current?.clear()}>↺ Clear</Btn>
-        <Btn onClick={() => actionsRef.current?.toggleSprings()}>⊞ Springs</Btn>
-        <Btn onClick={() => actionsRef.current?.toggleWireframe()}>◈ Wire</Btn>
+        <Btn label="Spawn" onClick={() => actionsRef.current?.drop()}>▼ Spawn</Btn>
+        <Btn label="Smash" onClick={() => actionsRef.current?.smash()}>💥 Smash</Btn>
+        <Btn label="Melt" onClick={() => actionsRef.current?.melt()}>~ Melt</Btn>
+        <Btn label="Clear" onClick={() => actionsRef.current?.clear()}>↺ Clear</Btn>
+        <Btn label="Springs" onClick={() => actionsRef.current?.toggleSprings()}>⊞ Springs</Btn>
+        <Btn label="Wire" onClick={() => actionsRef.current?.toggleWireframe()}>◈ Wire</Btn>
       </div>
     </>
   );
@@ -126,6 +126,7 @@ function SliderRow({
         max={max}
         step={step}
         defaultValue={defaultValue}
+        aria-label={label}
         style={{ width: 90, accentColor: tone ?? "#ffd700", cursor: "pointer" }}
         onChange={(e) => {
           const v = Number(e.target.value);
@@ -138,9 +139,9 @@ function SliderRow({
   );
 }
 
-function Btn({ onClick, children }: { onClick: () => void; children: ReactNode }) {
+function Btn({ label, onClick, children }: { label: string; onClick: () => void; children: ReactNode }) {
   return (
-    <button onClick={onClick} style={s.btn} onMouseEnter={hoverIn} onMouseLeave={hoverOut}>
+    <button aria-label={label} onClick={onClick} style={s.btn} onMouseEnter={hoverIn} onMouseLeave={hoverOut}>
       {children}
     </button>
   );

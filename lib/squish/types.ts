@@ -30,6 +30,7 @@ export interface SimState {
   facc: Float32Array;
   springs: Spring[];
   faces: Array<{ vertToParticle: number[]; triIdx: number[] }>;
+  surfaceParticleMask: Uint8Array;
   dropped: boolean;
 }
 

@@ -584,6 +584,7 @@
 
 import { useEffect, useRef } from "react";
 import { colorForId } from "../lib/squish/colors";
+import { createSceneDiagnostics } from "../lib/squish/contact";
 import { getPoseBounds, getPoseCenter, translatePose } from "../lib/squish/orientation";
 import { makeActions, type Actions } from "../lib/squish/sim-core";
 import { createRenderer } from "../lib/squish/renderer";
@@ -598,6 +599,33 @@ type Stats = {
   pct: string;
   status: string;
 };
+
+type DebugSnapshot = {
+  bodies: Array<{
+    id: number;
+    shape: ShapeName;
+    dropped: boolean;
+    bounds: ReturnType<typeof getPoseBounds>;
+  }>;
+  diagnostics: ReturnType<typeof createSceneDiagnostics>;
+};
+
+type SquishyDebugApi = {
+  clear: () => void;
+  setShape: (shape: ShapeName) => void;
+  setPrismDimensions: (dimensions: Partial<PrismDimensions>) => void;
+  setOrientation: (orientation: Partial<Orientation>) => void;
+  spawn: (mode?: "drop" | "smash") => void;
+  toggleWireframe: () => void;
+  toggleSprings: () => void;
+  snapshot: () => DebugSnapshot;
+};
+
+declare global {
+  interface Window {
+    __SQUISHY_DEBUG__?: SquishyDebugApi;
+  }
+}
 
 export default function SquishySim() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -704,6 +732,27 @@ export default function SquishySim() {
     updateStats();
   };
 
+  const applyPrismDimensions = (dimensions: Partial<PrismDimensions>) => {
+    prismDimensions.current = {
+      ...prismDimensions.current,
+      ...dimensions,
+    };
+
+    if (selectedShape.current === "prism") {
+      replacePreview("prism");
+    }
+  };
+
+  const getDebugSnapshot = (): DebugSnapshot => ({
+    bodies: bodiesRef.current.map((body) => ({
+      id: body.id,
+      shape: body.shape,
+      dropped: body.dropped,
+      bounds: getPoseBounds(body.pos),
+    })),
+    diagnostics: createSceneDiagnostics(bodiesRef.current),
+  });
+
   const replacePreview = (shape: ShapeName = selectedShape.current) => {
     const preview = createPreviewBody(shape);
     bodiesRef.current = [...getDroppedBodies(), preview];
@@ -723,11 +772,7 @@ export default function SquishySim() {
   };
 
   const handlePrismDimensionChange = (axis: keyof PrismDimensions, value: number) => {
-    prismDimensions.current[axis] = value;
-
-    if (selectedShape.current === "prism") {
-      replacePreview("prism");
-    }
+    applyPrismDimensions({ [axis]: value });
   };
 
   const handleShapeChange = (shape: ShapeName) => {
@@ -794,6 +839,27 @@ export default function SquishySim() {
     window.addEventListener("resize", resize);
     resize();
 
+    window.__SQUISHY_DEBUG__ = {
+      clear: () => actionsRef.current?.clear(),
+      setShape: (shape) => handleShapeChange(shape),
+      setPrismDimensions: (dimensions) => applyPrismDimensions(dimensions),
+      setOrientation: (nextOrientation) => {
+        for (const [axis, value] of Object.entries(nextOrientation) as Array<[keyof Orientation, number]>) {
+          handleOrientationChange(axis, value);
+        }
+      },
+      spawn: (mode = "drop") => {
+        if (mode === "smash") {
+          actionsRef.current?.smash();
+          return;
+        }
+        actionsRef.current?.drop();
+      },
+      toggleWireframe: () => actionsRef.current?.toggleWireframe(),
+      toggleSprings: () => actionsRef.current?.toggleSprings(),
+      snapshot: () => getDebugSnapshot(),
+    };
+
     let tick = 0;
     let raf = 0;
     const loop = () => {
@@ -806,6 +872,7 @@ export default function SquishySim() {
     return () => {
       cancelAnimationFrame(raf);
       window.removeEventListener("resize", resize);
+      delete window.__SQUISHY_DEBUG__;
       rendererRef.current = null;
       bodiesRef.current = [];
       basePoseRef.current = null;

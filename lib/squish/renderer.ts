@@ -1,3 +1,4 @@
+import { PARTICLE_RADIUS } from "./contact";
 import { getPoseCenter, getPoseRadius, rotateOffset } from "./orientation";
 import { stepSim } from "./sim-core";
 import type { Config, Orientation, SimState } from "./types";
@@ -34,9 +35,6 @@ import type { Config, Orientation, SimState } from "./types";
 //     vNorm = mat3(uModel) * aNormal;
 // }
 // `;
-
-const PARTICLE_RADIUS = 0.18;
-
 
 const BODY_VS = `#version 300 es
 precision highp float;

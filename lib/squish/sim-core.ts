@@ -1,9 +1,9 @@
+import { PARTICLE_RADIUS, SURFACE_CONTACT_HALF_EXTENT, isFlatContactShape } from './contact';
 import type { Config, SimState } from './types';
 
 const GRAVITY = 18;
 export const FLOOR_Y = -2.8;
 const DT = 1 / 60;
-const PARTICLE_RADIUS = 0.18;
 const COLLISION_RADIUS = PARTICLE_RADIUS * 2;
 const COLLISION_RADIUS_SQ = COLLISION_RADIUS * COLLISION_RADIUS;
 const CELL_SIZE = COLLISION_RADIUS * 2.1;
@@ -214,33 +214,18 @@ function resolveInterBodyCollisions(bodies: SimState[]) {
 function separateParticles(a: SimState, ai: number, b: SimState, bi: number) {
   const a_base = ai * 3;
   const b_base = bi * 3;
-  const dx = b.pos[b_base] - a.pos[a_base];
-  const dy = b.pos[b_base + 1] - a.pos[a_base + 1];
-  const dz = b.pos[b_base + 2] - a.pos[a_base + 2];
-  const dist_sq = dx * dx + dy * dy + dz * dz;
+  const contact = resolveFlatSurfaceContact(a, ai, b, bi) ?? resolveSphereContact(a, ai, b, bi);
+  if (!contact) return;
 
-  if (dist_sq >= COLLISION_RADIUS_SQ) return;
+  const { nx, ny, nz, overlap } = contact;
+  const [w_a, w_b] = getContactWeights(a, a_base, b, b_base, nx, ny, nz);
 
-  const dist = Math.sqrt(dist_sq) + 1e-8;
-  const overlap = COLLISION_RADIUS - dist;
-  if (overlap <= 0) return;
-
-  const nx = dx / dist;
-  const ny = dy / dist;
-  const nz = dz / dist;
-
-  const y_a = a.pos[a_base + 1];
-  const y_b = b.pos[b_base + 1];
-  const w_b = y_b > y_a ? 0.85 : 0.15;
-  const w_a = 1.0 - w_b;
-
-  const push = overlap * 0.5;
-  a.pos[a_base] -= nx * push * w_a;
-  a.pos[a_base + 1] -= ny * push * w_a;
-  a.pos[a_base + 2] -= nz * push * w_a;
-  b.pos[b_base] += nx * push * w_b;
-  b.pos[b_base + 1] += ny * push * w_b;
-  b.pos[b_base + 2] += nz * push * w_b;
+  a.pos[a_base] -= nx * overlap * w_a;
+  a.pos[a_base + 1] -= ny * overlap * w_a;
+  a.pos[a_base + 2] -= nz * overlap * w_a;
+  b.pos[b_base] += nx * overlap * w_b;
+  b.pos[b_base + 1] += ny * overlap * w_b;
+  b.pos[b_base + 2] += nz * overlap * w_b;
 
   const avx = a.pos[a_base] - a.prev[a_base];
   const avy = a.pos[a_base + 1] - a.prev[a_base + 1];
@@ -278,4 +263,71 @@ function separateParticles(a: SimState, ai: number, b: SimState, bi: number) {
     b.prev[b_base + 1] = b.pos[b_base + 1] - bvy;
     b.prev[b_base + 2] = b.pos[b_base + 2] - bvz;
   }
+}
+
+function resolveFlatSurfaceContact(a: SimState, ai: number, b: SimState, bi: number) {
+  if (!isFlatContactShape(a.shape) || !isFlatContactShape(b.shape)) return null;
+  if (!a.surfaceParticleMask[ai] || !b.surfaceParticleMask[bi]) return null;
+
+  const a_base = ai * 3;
+  const b_base = bi * 3;
+  const dx = b.pos[b_base] - a.pos[a_base];
+  const dy = b.pos[b_base + 1] - a.pos[a_base + 1];
+  const dz = b.pos[b_base + 2] - a.pos[a_base + 2];
+
+  const size = SURFACE_CONTACT_HALF_EXTENT * 2;
+  const px = size - Math.abs(dx);
+  const py = size - Math.abs(dy);
+  const pz = size - Math.abs(dz);
+
+  if (px <= 0 || py <= 0 || pz <= 0) return null;
+
+  if (py <= px && py <= pz) {
+    return { nx: 0, ny: dy >= 0 ? 1 : -1, nz: 0, overlap: py };
+  }
+  if (px <= pz) {
+    return { nx: dx >= 0 ? 1 : -1, ny: 0, nz: 0, overlap: px };
+  }
+  return { nx: 0, ny: 0, nz: dz >= 0 ? 1 : -1, overlap: pz };
+}
+
+function resolveSphereContact(a: SimState, ai: number, b: SimState, bi: number) {
+  const a_base = ai * 3;
+  const b_base = bi * 3;
+  const dx = b.pos[b_base] - a.pos[a_base];
+  const dy = b.pos[b_base + 1] - a.pos[a_base + 1];
+  const dz = b.pos[b_base + 2] - a.pos[a_base + 2];
+  const dist_sq = dx * dx + dy * dy + dz * dz;
+
+  if (dist_sq >= COLLISION_RADIUS_SQ) return null;
+
+  const dist = Math.sqrt(dist_sq) + 1e-8;
+  const overlap = COLLISION_RADIUS - dist;
+  if (overlap <= 0) return null;
+
+  return {
+    nx: dx / dist,
+    ny: dy / dist,
+    nz: dz / dist,
+    overlap,
+  };
+}
+
+function getContactWeights(
+  a: SimState,
+  a_base: number,
+  b: SimState,
+  b_base: number,
+  nx: number,
+  ny: number,
+  nz: number
+): [number, number] {
+  if (Math.abs(ny) >= Math.abs(nx) && Math.abs(ny) >= Math.abs(nz)) {
+    const y_a = a.pos[a_base + 1];
+    const y_b = b.pos[b_base + 1];
+    const w_b = y_b > y_a ? 0.85 : 0.15;
+    return [1.0 - w_b, w_b];
+  }
+
+  return [0.5, 0.5];
 }

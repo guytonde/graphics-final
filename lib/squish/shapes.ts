@@ -1,3 +1,4 @@
+import { buildSurfaceParticleMask } from './contact';
 import { DEFAULT_PRISM_DIMENSIONS, type BodyColor, type PrismDimensions, type ShapeName, type SimState } from './types';
 
 interface ShapeMeta {
@@ -130,6 +131,8 @@ function buildGrid(
     return { vertToParticle, triIdx };
   });
 
+  const surfaceParticleMask = buildSurfaceParticleMask(N, faces);
+
   return {
     id: meta.id ?? 0,
     shape,
@@ -140,6 +143,7 @@ function buildGrid(
     facc: new Float32Array(N * 3),
     springs,
     faces,
+    surfaceParticleMask,
     dropped: meta.dropped ?? false,
   };
 }
@@ -243,6 +247,9 @@ function sphere(meta: ShapeMeta): SimState {
     triIdx.push(f[0], f[1], f[2]);
   }
 
+  const surfaceFaces = [{ vertToParticle, triIdx }];
+  const surfaceParticleMask = buildSurfaceParticleMask(N, surfaceFaces);
+
   return {
     id: meta.id ?? 0,
     shape: 'sphere',
@@ -252,7 +259,8 @@ function sphere(meta: ShapeMeta): SimState {
     prev: new Float32Array(pos), // Perfectly synced
     facc: new Float32Array(N * 3),
     springs,
-    faces: [{ vertToParticle, triIdx }],
+    faces: surfaceFaces,
+    surfaceParticleMask,
     dropped: meta.dropped ?? false
   };
 }
