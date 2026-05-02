@@ -1,6 +1,6 @@
-import { PARTICLE_RADIUS } from "./contact";
-import { getPoseCenter, getPoseRadius, rotateOffset, translatePose } from "./orientation";
-import { stepSim } from "./sim-core";
+import { PARTICLE_RADIUS, SURFACE_CONTACT_HALF_EXTENT } from "./contact";
+import { getPoseCenter, getPoseRadius, rotateOffset } from "./orientation";
+import { resolveBodyContacts, stepSim } from "./sim-core";
 import type { Config, Orientation, SimState } from "./types";
 
 // const BODY_VS = `#version 300 es
@@ -94,6 +94,10 @@ void main() {
 
 const CAMERA_FOV = Math.PI / 4;
 const WORLD_UP: [number, number, number] = [0, 1, 0];
+const MAX_GRAB_STEP = SURFACE_CONTACT_HALF_EXTENT * 0.5;
+const MIN_GRAB_RADIUS = PARTICLE_RADIUS * 3.25;
+const MAX_GRAB_RADIUS = PARTICLE_RADIUS * 6;
+const GRAB_RADIUS_SCALE = 0.32;
 
 const cross3 = (a: number[], b: number[]) => [
   a[1] * b[2] - a[2] * b[1],
@@ -220,10 +224,14 @@ interface RenderBody {
 
 type PointerMode = "orbit" | "pan" | "grab" | null;
 
+interface GrabInfluence {
+  particle: number;
+  offset: [number, number, number];
+}
+
 interface GrabState {
   body: SimState;
-  anchorParticle: number;
-  anchorOffset: [number, number, number];
+  influences: GrabInfluence[];
   planeOrigin: [number, number, number];
   planeNormal: [number, number, number];
   targetPoint: [number, number, number];
@@ -467,45 +475,123 @@ export function createRenderer(canvas: HTMLCanvasElement) {
       }
     }
 
-    const anchorBase = anchorParticle * 3;
+    const grabRadius = Math.max(
+      MIN_GRAB_RADIUS,
+      Math.min(MAX_GRAB_RADIUS, getPoseRadius(best.body.pos) * GRAB_RADIUS_SCALE)
+    );
+    const grabRadiusSq = grabRadius * grabRadius;
+    const influences: GrabInfluence[] = [];
+
+    for (let i = 0; i < best.body.N; i++) {
+      const base = i * 3;
+      const dx = best.body.pos[base] - best.hitPoint[0];
+      const dy = best.body.pos[base + 1] - best.hitPoint[1];
+      const dz = best.body.pos[base + 2] - best.hitPoint[2];
+      const distSq = dx * dx + dy * dy + dz * dz;
+      if (distSq > grabRadiusSq) continue;
+
+      influences.push({
+        particle: i,
+        offset: [
+          best.hitPoint[0] - best.body.pos[base],
+          best.hitPoint[1] - best.body.pos[base + 1],
+          best.hitPoint[2] - best.body.pos[base + 2],
+        ],
+      });
+    }
+
+    if (!influences.length) {
+      const anchorBase = anchorParticle * 3;
+      influences.push({
+        particle: anchorParticle,
+        offset: [
+          best.hitPoint[0] - best.body.pos[anchorBase],
+          best.hitPoint[1] - best.body.pos[anchorBase + 1],
+          best.hitPoint[2] - best.body.pos[anchorBase + 2],
+        ],
+      });
+    }
+
     return {
       body: best.body,
-      anchorParticle,
       hitPoint: best.hitPoint,
-      anchorOffset: [
-        best.hitPoint[0] - best.body.pos[anchorBase],
-        best.hitPoint[1] - best.body.pos[anchorBase + 1],
-        best.hitPoint[2] - best.body.pos[anchorBase + 2],
-      ] as [number, number, number],
+      influences,
       planeNormal: [...getCameraBasis().forward] as [number, number, number],
     };
   };
 
-  const syncPrevToPos = (body: SimState) => {
-    body.prev.set(body.pos);
+  const getCurrentGrabPoint = (state: GrabState): [number, number, number] => {
+    let x = 0;
+    let y = 0;
+    let z = 0;
+
+    for (const influence of state.influences) {
+      const base = influence.particle * 3;
+      x += state.body.pos[base] + influence.offset[0];
+      y += state.body.pos[base + 1] + influence.offset[1];
+      z += state.body.pos[base + 2] + influence.offset[2];
+    }
+
+    const count = state.influences.length || 1;
+    return [x / count, y / count, z / count];
+  };
+
+  const translateGrabRegion = (
+    body: SimState,
+    influences: GrabInfluence[],
+    dx: number,
+    dy: number,
+    dz: number
+  ) => {
+    for (const influence of influences) {
+      const base = influence.particle * 3;
+      body.pos[base] += dx;
+      body.pos[base + 1] += dy;
+      body.pos[base + 2] += dz;
+      body.prev[base] += dx;
+      body.prev[base + 1] += dy;
+      body.prev[base + 2] += dz;
+    }
+  };
+
+  const alignGrabRegionToTarget = (state: GrabState, point: [number, number, number]) => {
+    const currentPoint = getCurrentGrabPoint(state);
+    translateGrabRegion(
+      state.body,
+      state.influences,
+      point[0] - currentPoint[0],
+      point[1] - currentPoint[1],
+      point[2] - currentPoint[2]
+    );
   };
 
   const applyGrabConstraint = () => {
     if (!grabState) return;
 
-    const anchorBase = grabState.anchorParticle * 3;
-    const currentPoint: [number, number, number] = [
-      grabState.body.pos[anchorBase] + grabState.anchorOffset[0],
-      grabState.body.pos[anchorBase + 1] + grabState.anchorOffset[1],
-      grabState.body.pos[anchorBase + 2] + grabState.anchorOffset[2],
-    ];
-
+    const currentPoint = getCurrentGrabPoint(grabState);
     const dx = grabState.targetPoint[0] - currentPoint[0];
     const dy = grabState.targetPoint[1] - currentPoint[1];
     const dz = grabState.targetPoint[2] - currentPoint[2];
 
     if (Math.abs(dx) < 1e-6 && Math.abs(dy) < 1e-6 && Math.abs(dz) < 1e-6) {
-      syncPrevToPos(grabState.body);
+      alignGrabRegionToTarget(grabState, grabState.targetPoint);
       return;
     }
 
-    translatePose(grabState.body.pos, grabState.body.prev, dx, dy, dz);
-    syncPrevToPos(grabState.body);
+    const steps = Math.max(1, Math.ceil(Math.hypot(dx, dy, dz) / MAX_GRAB_STEP));
+    const stepDx = dx / steps;
+    const stepDy = dy / steps;
+    const stepDz = dz / steps;
+
+    const stepPoint: [number, number, number] = [...currentPoint];
+    for (let step = 0; step < steps; step++) {
+      stepPoint[0] += stepDx;
+      stepPoint[1] += stepDy;
+      stepPoint[2] += stepDz;
+      alignGrabRegionToTarget(grabState, stepPoint);
+      resolveBodyContacts(bodies);
+      alignGrabRegionToTarget(grabState, stepPoint);
+    }
   };
 
   const panCamera = (dx: number, dy: number) => {
@@ -528,8 +614,7 @@ export function createRenderer(canvas: HTMLCanvasElement) {
     pointerMode = "grab";
     grabState = {
       body: pick.body,
-      anchorParticle: pick.anchorParticle,
-      anchorOffset: pick.anchorOffset,
+      influences: pick.influences,
       planeOrigin: pick.hitPoint,
       planeNormal: pick.planeNormal,
       targetPoint: pick.hitPoint,

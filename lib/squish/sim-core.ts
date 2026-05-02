@@ -1,4 +1,5 @@
 import { PARTICLE_RADIUS, SURFACE_CONTACT_HALF_EXTENT, isFlatContactShape } from './contact';
+import { getPoseBounds, getPoseCenter } from './orientation';
 import type { Config, SimState } from './types';
 
 const GRAVITY = 18;
@@ -11,6 +12,10 @@ const FLOOR_BOUNCE = 0.8;
 const FLOOR_FRICTION = 0.85;
 const INTER_BODY_RESTITUTION = 0.1;
 const INTER_BODY_FRICTION = 0.8;
+const FLAT_BODY_CONTACT_PADDING = PARTICLE_RADIUS;
+const FLAT_BODY_PROXY_BAND = SURFACE_CONTACT_HALF_EXTENT * 4;
+const MAX_ADAPTIVE_MOTION_SUBSTEPS = 6;
+const MAX_TRAVEL_PER_MOTION_STEP = SURFACE_CONTACT_HALF_EXTENT * 0.5;
 
 const NEIGHBOR_OFFSETS = [-1, 0, 1].flatMap(dx =>
   [-1, 0, 1].flatMap(dy =>
@@ -47,15 +52,17 @@ export function stepSim(bodies: SimState[], cfg: Config) {
   const active_bodies = bodies.filter(body => body.dropped);
   if (!active_bodies.length) return;
 
-  const sub_dt = DT / cfg.substeps;
+  const motion_substeps = active_bodies.length > 1
+    ? getAdaptiveMotionSubsteps(active_bodies, cfg.substeps)
+    : 1;
+  const total_substeps = cfg.substeps * motion_substeps;
+  const sub_dt = DT / total_substeps;
   const sdt2 = sub_dt * sub_dt;
 
-  // FIX: Restored original per-substep damping.
-  // The "mathematically correct" scale made it too weak, 
-  // causing the shapes to explode and fracture instantly.
-  const sub_damping = cfg.damping; 
+  // Preserve the existing damping feel while allowing extra micro-steps for fast impacts.
+  const sub_damping = Math.pow(cfg.damping, 1 / motion_substeps);
 
-  for (let sub = 0; sub < cfg.substeps; sub++) {
+  for (let sub = 0; sub < total_substeps; sub++) {
     for (const body of active_bodies) {
       body.facc.fill(0);
       for (let i = 0; i < body.N; i++) {
@@ -122,6 +129,40 @@ export function stepSim(bodies: SimState[], cfg: Config) {
   }
 }
 
+function getAdaptiveMotionSubsteps(bodies: SimState[], baseSubsteps: number) {
+  let maxTravel = 0;
+
+  for (const body of bodies) {
+    for (let i = 0; i < body.N; i++) {
+      const base = i * 3;
+      const travel = Math.hypot(
+        body.pos[base] - body.prev[base],
+        body.pos[base + 1] - body.prev[base + 1],
+        body.pos[base + 2] - body.prev[base + 2]
+      );
+      if (travel > maxTravel) {
+        maxTravel = travel;
+      }
+    }
+  }
+
+  const perSubstepTravel = maxTravel / Math.max(1, baseSubsteps);
+  return Math.max(
+    1,
+    Math.min(
+      MAX_ADAPTIVE_MOTION_SUBSTEPS,
+      Math.ceil(perSubstepTravel / MAX_TRAVEL_PER_MOTION_STEP)
+    )
+  );
+}
+
+export function resolveBodyContacts(bodies: SimState[]) {
+  const active_bodies = bodies.filter((body) => body.dropped);
+  if (active_bodies.length > 1) {
+    resolveInterBodyCollisions(active_bodies);
+  }
+}
+
 function clampFloor(body: SimState, i: number) {
   const base = i * 3;
   const py = body.pos[base + 1];
@@ -145,6 +186,8 @@ function clampFloor(body: SimState, i: number) {
 }
 
 function resolveInterBodyCollisions(bodies: SimState[]) {
+  resolveFlatBodyProxyContacts(bodies);
+
   let total_particles = 0;
   for (const body of bodies) total_particles += body.N;
 
@@ -208,6 +251,150 @@ function resolveInterBodyCollisions(bodies: SimState[]) {
         }
       }
     }
+  }
+}
+
+function resolveFlatBodyProxyContacts(bodies: SimState[]) {
+  for (let ai = 0; ai < bodies.length; ai++) {
+    const a = bodies[ai];
+    if (!isFlatContactShape(a.shape)) continue;
+
+    for (let bi = ai + 1; bi < bodies.length; bi++) {
+      const b = bodies[bi];
+      if (!isFlatContactShape(b.shape)) continue;
+
+      const contact = getFlatBodyProxyContact(a, b);
+      if (!contact) continue;
+
+      const { nx, ny, nz, overlap } = contact;
+      const [w_a, w_b] = getBodyContactWeights(a, b, nx, ny, nz);
+
+      applyLocalizedBodyProxyCorrection(
+        a,
+        -nx * overlap * w_a,
+        -ny * overlap * w_a,
+        -nz * overlap * w_a,
+        nx,
+        ny,
+        nz,
+        true
+      );
+      applyLocalizedBodyProxyCorrection(
+        b,
+        nx * overlap * w_b,
+        ny * overlap * w_b,
+        nz * overlap * w_b,
+        nx,
+        ny,
+        nz,
+        false
+      );
+    }
+  }
+}
+
+function getFlatBodyProxyContact(a: SimState, b: SimState) {
+  const aBounds = getPoseBounds(a.pos);
+  const bBounds = getPoseBounds(b.pos);
+
+  const px = Math.min(aBounds.maxX + FLAT_BODY_CONTACT_PADDING, bBounds.maxX + FLAT_BODY_CONTACT_PADDING)
+    - Math.max(aBounds.minX - FLAT_BODY_CONTACT_PADDING, bBounds.minX - FLAT_BODY_CONTACT_PADDING);
+  const py = Math.min(aBounds.maxY + FLAT_BODY_CONTACT_PADDING, bBounds.maxY + FLAT_BODY_CONTACT_PADDING)
+    - Math.max(aBounds.minY - FLAT_BODY_CONTACT_PADDING, bBounds.minY - FLAT_BODY_CONTACT_PADDING);
+  const pz = Math.min(aBounds.maxZ + FLAT_BODY_CONTACT_PADDING, bBounds.maxZ + FLAT_BODY_CONTACT_PADDING)
+    - Math.max(aBounds.minZ - FLAT_BODY_CONTACT_PADDING, bBounds.minZ - FLAT_BODY_CONTACT_PADDING);
+
+  if (px <= 0 || py <= 0 || pz <= 0) return null;
+
+  const [acx, acy, acz] = getPoseCenter(a.pos);
+  const [bcx, bcy, bcz] = getPoseCenter(b.pos);
+  const dx = bcx - acx;
+  const dy = bcy - acy;
+  const dz = bcz - acz;
+
+  if (py <= px && py <= pz) {
+    return { nx: 0, ny: dy >= 0 ? 1 : -1, nz: 0, overlap: py };
+  }
+  if (px <= pz) {
+    return { nx: dx >= 0 ? 1 : -1, ny: 0, nz: 0, overlap: px };
+  }
+  return { nx: 0, ny: 0, nz: dz >= 0 ? 1 : -1, overlap: pz };
+}
+
+function getBodyContactWeights(
+  a: SimState,
+  b: SimState,
+  nx: number,
+  ny: number,
+  nz: number
+): [number, number] {
+  if (Math.abs(ny) >= Math.abs(nx) && Math.abs(ny) >= Math.abs(nz)) {
+    const [, y_a] = getPoseCenter(a.pos);
+    const [, y_b] = getPoseCenter(b.pos);
+    const w_b = y_b > y_a ? 0.85 : 0.15;
+    return [1.0 - w_b, w_b];
+  }
+
+  return [0.5, 0.5];
+}
+
+function applyLocalizedBodyProxyCorrection(
+  body: SimState,
+  dx: number,
+  dy: number,
+  dz: number,
+  nx: number,
+  ny: number,
+  nz: number,
+  towardPositiveNormal: boolean
+) {
+  let support = towardPositiveNormal ? -Infinity : Infinity;
+
+  for (let i = 0; i < body.N; i++) {
+    const base = i * 3;
+    const projection =
+      body.pos[base] * nx +
+      body.pos[base + 1] * ny +
+      body.pos[base + 2] * nz;
+
+    if (towardPositiveNormal) {
+      if (projection > support) support = projection;
+    } else if (projection < support) {
+      support = projection;
+    }
+  }
+
+  if (!Number.isFinite(support)) return;
+
+  for (let i = 0; i < body.N; i++) {
+    const base = i * 3;
+    const projection =
+      body.pos[base] * nx +
+      body.pos[base + 1] * ny +
+      body.pos[base + 2] * nz;
+    const depth = towardPositiveNormal ? support - projection : projection - support;
+    if (depth >= FLAT_BODY_PROXY_BAND) continue;
+
+    const weight = 1 - depth / FLAT_BODY_PROXY_BAND;
+    if (weight <= 0) continue;
+
+    body.pos[base] += dx * weight;
+    body.pos[base + 1] += dy * weight;
+    body.pos[base + 2] += dz * weight;
+    body.prev[base] += dx * weight;
+    body.prev[base + 1] += dy * weight;
+    body.prev[base + 2] += dz * weight;
+
+    const vx = body.pos[base] - body.prev[base];
+    const vy = body.pos[base + 1] - body.prev[base + 1];
+    const vz = body.pos[base + 2] - body.prev[base + 2];
+    const normal_vel = vx * nx + vy * ny + vz * nz;
+
+    if (towardPositiveNormal ? normal_vel <= 0 : normal_vel >= 0) continue;
+
+    body.prev[base] += nx * normal_vel * weight;
+    body.prev[base + 1] += ny * normal_vel * weight;
+    body.prev[base + 2] += nz * normal_vel * weight;
   }
 }
 

@@ -634,6 +634,8 @@ declare global {
   }
 }
 
+const SMASH_LAUNCH_SPEED = 0.95;
+
 export default function SquishySim() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const cfg = useRef<Config>({ stiffness: 1500, damping: 0.99, breakRatio: 2, substeps: 10 });
@@ -804,14 +806,13 @@ export default function SquishySim() {
 
       preview.dropped = true;
       if (mode === "smash") {
-        const [cx, , cz] = getPoseCenter(preview.pos);
         for (let i = 0; i < preview.N; i++) {
           const base = i * 3;
-          const str = Math.max(0, 1.4 - Math.hypot(preview.pos[base] - cx, preview.pos[base + 2] - cz) * 0.8);
-          const j = (Math.random() - 0.5) * 0.12;
-          preview.prev[base + 1] = preview.pos[base + 1] + str * 1.8;
-          preview.prev[base] -= j;
-          preview.prev[base + 2] -= j;
+          // Keep the launch coherent so impact response stops the body instead
+          // of immediately shearing it apart with per-particle velocity noise.
+          preview.prev[base] = preview.pos[base];
+          preview.prev[base + 1] = preview.pos[base + 1] + SMASH_LAUNCH_SPEED;
+          preview.prev[base + 2] = preview.pos[base + 2];
         }
       }
 
